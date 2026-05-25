@@ -1,5 +1,6 @@
 // android scanner module
 pub mod apk;
+pub mod apkid;
 pub mod binary;
 pub mod cert;
 pub mod jadx;
@@ -212,6 +213,28 @@ pub async fn scan_apk(
         let java_files = tracker::collect_java_files(&sources_dir);
         let tracker_findings = tracker::detect_trackers(&java_files, &tracker_db);
         all_findings.extend(tracker_findings);
+    }
+
+    // Step 9d: Packer/obfuscator detection
+    broadcast(progress_tx, scan_id, "Detecting packers and obfuscators...", 86);
+    {
+        // Collect raw DEX bytes from the extracted DEX file paths.
+        let dex_bytes: Vec<Vec<u8>> = extracted
+            .dex_files
+            .iter()
+            .filter_map(|p| std::fs::read(p).ok())
+            .collect();
+
+        // Collect Java source paths if jadx succeeded (reuse sources_dir).
+        let java_files_for_apkid: Vec<std::path::PathBuf> = if jadx_success && sources_dir.is_dir() {
+            tracker::collect_java_files(&sources_dir)
+        } else {
+            Vec::new()
+        };
+
+        let packer_results = apkid::detect_packers(apk_path, &dex_bytes, &java_files_for_apkid);
+        let packer_findings = apkid::packer_findings(&packer_results);
+        all_findings.extend(packer_findings);
     }
 
     // Step 9b: Network Security Config analysis
