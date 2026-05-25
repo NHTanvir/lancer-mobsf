@@ -5,6 +5,7 @@
 //   2. Searching raw DEX bytes for known byte-string signatures.
 //   3. Scanning decompiled Java source files (up to 50) for known package names.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use crate::scanner::ScanFinding;
 
@@ -164,6 +165,7 @@ pub fn detect_packers(
     java_files: &[PathBuf],
 ) -> Vec<PackerInfo> {
     let mut results: Vec<PackerInfo> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
 
     // ── 1. Collect APK zip entry names ─────────────────────────────────────
     let zip_names: Vec<String> = collect_zip_names(apk_path);
@@ -173,11 +175,14 @@ pub fn detect_packers(
 
     // ── 2. ProGuard detection (directory-based) ────────────────────────────
     if has_proguard_dir {
-        results.push(PackerInfo {
-            name: "ProGuard".to_string(),
-            category: "obfuscator".to_string(),
-            confidence: "high",
-        });
+        if !seen.contains("ProGuard") {
+            seen.insert("ProGuard".to_string());
+            results.push(PackerInfo {
+                name: "ProGuard".to_string(),
+                category: "obfuscator".to_string(),
+                confidence: "high",
+            });
+        }
     }
 
     // ── 3. Per-signature detection ─────────────────────────────────────────
@@ -189,11 +194,14 @@ pub fn detect_packers(
                 .iter()
                 .any(|n| n.to_lowercase().contains(&lower_pattern))
             {
-                results.push(PackerInfo {
-                    name: sig.name.to_string(),
-                    category: sig.category.to_string(),
-                    confidence: sig.confidence,
-                });
+                if !seen.contains(sig.name) {
+                    seen.insert(sig.name.to_string());
+                    results.push(PackerInfo {
+                        name: sig.name.to_string(),
+                        category: sig.category.to_string(),
+                        confidence: sig.confidence,
+                    });
+                }
                 continue 'sig;
             }
         }
@@ -203,11 +211,14 @@ pub fn detect_packers(
             for dex in dex_files {
                 for pattern in sig.dex_patterns {
                     if bytes_contain(dex, pattern.as_bytes()) {
-                        results.push(PackerInfo {
-                            name: sig.name.to_string(),
-                            category: sig.category.to_string(),
-                            confidence: sig.confidence,
-                        });
+                        if !seen.contains(sig.name) {
+                            seen.insert(sig.name.to_string());
+                            results.push(PackerInfo {
+                                name: sig.name.to_string(),
+                                category: sig.category.to_string(),
+                                confidence: sig.confidence,
+                            });
+                        }
                         continue 'sig;
                     }
                 }
@@ -223,20 +234,20 @@ pub fn detect_packers(
                 };
                 for pattern in sig.java_patterns {
                     if source.contains(pattern) {
-                        results.push(PackerInfo {
-                            name: sig.name.to_string(),
-                            category: sig.category.to_string(),
-                            confidence: sig.confidence,
-                        });
+                        if !seen.contains(sig.name) {
+                            seen.insert(sig.name.to_string());
+                            results.push(PackerInfo {
+                                name: sig.name.to_string(),
+                                category: sig.category.to_string(),
+                                confidence: sig.confidence,
+                            });
+                        }
                         break 'java;
                     }
                 }
             }
         }
     }
-
-    // Deduplicate by name (a signature can only appear once)
-    results.dedup_by(|a, b| a.name == b.name);
 
     results
 }
@@ -309,12 +320,19 @@ fn collect_zip_names(apk_path: &Path) -> Vec<String> {
 }
 
 /// Returns `true` if `haystack` contains the byte sequence `needle`.
-/// Uses the sliding-window approach (`.windows()`) — no extra dependencies.
+/// Uses `str::contains` for valid UTF-8 data (optimized two-way algorithm),
+/// falling back to a sliding-window scan for non-UTF-8 binary data.
 #[inline]
 fn bytes_contain(haystack: &[u8], needle: &[u8]) -> bool {
     if needle.is_empty() {
         return true;
     }
+    // aho-corasick is already a dep; use its finder for ASCII patterns in binary data
+    // Simple fast path: try as str first (most DEX content is ASCII-dominated)
+    if let (Ok(h), Ok(n)) = (std::str::from_utf8(haystack), std::str::from_utf8(needle)) {
+        return h.contains(n);
+    }
+    // Fallback: windows scan for non-UTF8 data
     haystack.windows(needle.len()).any(|w| w == needle)
 }
 
@@ -341,10 +359,11 @@ mod tests {
             0x00, 0x00, // comment length
         ];
         let path = std::env::temp_dir().join(format!(
-            "lancer_apkid_test_{}.apk",
+            "lancer_apkid_test_{}_{}.apk",
+            std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.subsec_nanos())
+                .map(|d| d.as_nanos())
                 .unwrap_or(0)
         ));
         let mut f = std::fs::File::create(&path).expect("create temp apk");
