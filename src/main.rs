@@ -3,6 +3,15 @@
 
 use clap::Parser;
 
+pub mod api;
+pub mod db;
+pub mod dynamic;
+pub mod masvs;
+pub mod report;
+pub mod scanner;
+pub mod upload;
+pub mod ws;
+
 #[derive(Parser, Debug)]
 #[command(name = "lancer-mobsf", version, about = "Rust clone of mobsf")]
 struct Cli {}
