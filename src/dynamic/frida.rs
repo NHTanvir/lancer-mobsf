@@ -284,24 +284,43 @@ fn parse_frida_ps_output(output: &str) -> Vec<FridaProcess> {
             continue;
         }
 
-        // Split on runs of whitespace; at most 3 fields
-        let parts: Vec<&str> = trimmed.splitn(3, char::is_whitespace)
-            .map(|s| s.trim())
-            .filter(|s| !s.is_empty())
-            .collect();
-
-        if parts.len() < 2 {
-            continue;
-        }
-
-        let pid: u32 = match parts[0].parse() {
+        // First token is PID; remaining columns are separated by 2+ spaces
+        // (App names may contain single spaces, so we can't split on single whitespace)
+        let mut iter = trimmed.splitn(2, char::is_whitespace);
+        let pid_str = iter.next().unwrap_or("").trim();
+        let pid: u32 = match pid_str.parse() {
             Ok(p) => p,
             Err(_) => continue,
         };
 
-        let name = parts[1].to_string();
-        let identifier = if parts.len() >= 3 {
-            parts[2].to_string()
+        // Rest of line: split on 2+ consecutive spaces to separate Name from Identifier
+        let rest = iter.next().unwrap_or("").trim();
+        let col_parts: Vec<&str> = {
+            // Manual split on runs of 2+ spaces
+            let mut parts = Vec::new();
+            let mut start = 0;
+            let bytes = rest.as_bytes();
+            let mut i = 0;
+            while i < bytes.len() {
+                if i + 1 < bytes.len() && bytes[i] == b' ' && bytes[i + 1] == b' ' {
+                    parts.push(rest[start..i].trim());
+                    while i < bytes.len() && bytes[i] == b' ' { i += 1; }
+                    start = i;
+                } else {
+                    i += 1;
+                }
+            }
+            parts.push(rest[start..].trim());
+            parts.into_iter().filter(|s| !s.is_empty()).collect()
+        };
+
+        if col_parts.is_empty() {
+            continue;
+        }
+
+        let name = col_parts[0].to_string();
+        let identifier = if col_parts.len() >= 2 {
+            col_parts[col_parts.len() - 1].to_string()
         } else {
             name.clone()
         };
