@@ -1,1 +1,518 @@
-# iOS security rules placeholder
+# iOS security rules for MobSF-compatible rule engine
+# 50 rules across 8 categories
+
+# ─── Hardcoded Secrets (8 rules) ─────────────────────────────────────────────
+
+- id: ios_hardcoded_password
+  message: "Hardcoded password found"
+  type: Regex
+  pattern: '(?i)password\s*[=:]\s*@?"[^"]{4,}"'
+  severity: high
+  input_case: lower
+  cwe: CWE-259
+  owasp: m2
+  masvs: storage-14
+
+- id: ios_hardcoded_key
+  message: "Hardcoded cryptographic key"
+  type: Regex
+  pattern: 'kSecAttrKeyType|SecKeyCreateWithData.*base64'
+  severity: high
+  input_case: exact
+  cwe: CWE-321
+  owasp: m5
+  masvs: crypto-1
+
+- id: ios_aws_access_key
+  message: "AWS Access Key hardcoded"
+  type: Regex
+  pattern: 'AKIA[0-9A-Z]{16}'
+  severity: critical
+  input_case: exact
+  cwe: CWE-798
+  owasp: m2
+  masvs: storage-14
+
+- id: ios_google_api_key
+  message: "Google API key hardcoded"
+  type: Regex
+  pattern: 'AIza[0-9A-Za-z_\-]{35}'
+  severity: high
+  input_case: exact
+  cwe: CWE-798
+  owasp: m2
+  masvs: storage-14
+
+- id: ios_private_key
+  message: "Private key material detected"
+  type: Regex
+  pattern: '-----BEGIN (RSA |EC )?PRIVATE KEY-----'
+  severity: critical
+  input_case: exact
+  cwe: CWE-321
+  owasp: m5
+  masvs: crypto-1
+
+- id: ios_jwt_token
+  message: "JWT token hardcoded"
+  type: Regex
+  pattern: 'eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.'
+  severity: high
+  input_case: exact
+  cwe: CWE-522
+  owasp: m3
+  masvs: auth-2
+
+- id: ios_firebase_key
+  message: "Firebase server key hardcoded"
+  type: Regex
+  pattern: 'AAAA[A-Za-z0-9_\-]{7}:'
+  severity: critical
+  input_case: exact
+  cwe: CWE-798
+  owasp: m2
+  masvs: storage-14
+
+- id: ios_slack_token
+  message: "Slack token hardcoded"
+  type: Regex
+  pattern: 'xox[baprs]-[0-9a-zA-Z]{10,}'
+  severity: critical
+  input_case: exact
+  cwe: CWE-798
+  owasp: m2
+  masvs: storage-14
+
+# ─── Insecure Networking (8 rules) ───────────────────────────────────────────
+
+- id: ios_http_url
+  message: "HTTP URL (not HTTPS)"
+  type: Regex
+  pattern: 'http://[^"\s]{5,}'
+  severity: medium
+  input_case: lower
+  cwe: CWE-319
+  owasp: m3
+  masvs: network-1
+
+- id: ios_ssl_pinning_bypass
+  message: "SSL pinning may be bypassable"
+  type: Regex
+  pattern: 'didReceiveAuthenticationChallenge|willPerformHTTPRedirection|URLSession.*completionHandler'
+  severity: medium
+  input_case: exact
+  cwe: CWE-295
+  owasp: m3
+  masvs: network-2
+
+- id: ios_allow_any_cert
+  message: "Certificate validation disabled"
+  type: Regex
+  pattern: 'SecTrustEvaluate.*noErr|URLCredential.*serverTrust'
+  severity: critical
+  input_case: exact
+  cwe: CWE-295
+  owasp: m3
+  masvs: network-2
+
+- id: ios_cfnetwork_proxy
+  message: "Proxy configuration in network settings"
+  type: Regex
+  pattern: 'kCFProxyTypeHTTP|kCFNetworkProxiesHTTPEnable'
+  severity: info
+  input_case: exact
+  cwe: ~
+  owasp: m3
+  masvs: network-1
+
+- id: ios_nsurlsession_delegate
+  message: "Custom NSURLSession delegate may bypass SSL"
+  type: Regex
+  pattern: 'NSURLSessionDelegate.*didReceiveChallenge'
+  severity: medium
+  input_case: exact
+  cwe: CWE-295
+  owasp: m3
+  masvs: network-2
+
+- id: ios_socket_without_tls
+  message: "Raw socket connection without TLS"
+  type: Regex
+  pattern: 'CFSocketCreate|GCDAsyncSocket'
+  severity: high
+  input_case: exact
+  cwe: CWE-319
+  owasp: m3
+  masvs: network-1
+
+- id: ios_webview_content_access
+  message: "WKWebView with file access"
+  type: Regex
+  pattern: 'allowFileAccessFromFileURLs.*true|allowUniversalAccessFromFileURLs.*true'
+  severity: high
+  input_case: lower
+  cwe: CWE-22
+  owasp: m1
+  masvs: platform-6
+
+- id: ios_webview_js
+  message: "WKWebView with JavaScript enabled"
+  type: Regex
+  pattern: 'javaScriptEnabled.*true|WKWebView.*allowsInlineMediaPlayback'
+  severity: medium
+  input_case: lower
+  cwe: CWE-749
+  owasp: m1
+  masvs: platform-6
+
+# ─── Insecure Data Storage (8 rules) ─────────────────────────────────────────
+
+- id: ios_nsuserdefaults_sensitive
+  message: "Sensitive data may be stored in NSUserDefaults"
+  type: Regex
+  pattern: '(?i)NSUserDefaults.*password|NSUserDefaults.*token|NSUserDefaults.*secret'
+  severity: high
+  input_case: lower
+  cwe: CWE-312
+  owasp: m2
+  masvs: storage-1
+
+- id: ios_keychain_missing
+  message: "App stores credentials without keychain"
+  type: Regex
+  pattern: '(?i)(password|token|secret)\s*=\s*@?"[^"]{4,}"'
+  severity: medium
+  input_case: lower
+  cwe: CWE-312
+  owasp: m2
+  masvs: storage-1
+
+- id: ios_plist_write_data
+  message: "Sensitive data written to plist file"
+  type: Regex
+  pattern: 'writeToFile.*atomically|NSDictionary.*writeToURL'
+  severity: medium
+  input_case: exact
+  cwe: CWE-312
+  owasp: m2
+  masvs: storage-2
+
+- id: ios_coredata_no_encryption
+  message: "Core Data without encryption"
+  type: Regex
+  pattern: 'NSPersistentContainer|NSPersistentStoreCoordinator'
+  severity: info
+  input_case: exact
+  cwe: CWE-312
+  owasp: m2
+  masvs: storage-1
+
+- id: ios_logs_sensitive
+  message: "Sensitive data printed to logs"
+  type: Regex
+  pattern: '(?i)NSLog\s*\(@?"[^"]*(?:password|token|secret)'
+  severity: high
+  input_case: lower
+  cwe: CWE-532
+  owasp: m2
+  masvs: storage-3
+
+- id: ios_tmp_dir
+  message: "Writing to temp directory (not secure)"
+  type: Regex
+  pattern: 'NSTemporaryDirectory\(\)|FileManager.*temporaryDirectory'
+  severity: low
+  input_case: exact
+  cwe: CWE-312
+  owasp: m2
+  masvs: storage-2
+
+- id: ios_clipboard_read
+  message: "Clipboard access"
+  type: Regex
+  pattern: 'UIPasteboard\.general|pasteboardWithName'
+  severity: medium
+  input_case: exact
+  cwe: CWE-200
+  owasp: m2
+  masvs: storage-5
+
+- id: ios_sqlite_no_encryption
+  message: "SQLite without encryption"
+  type: Regex
+  pattern: 'sqlite3_open\b|FMDatabase'
+  severity: medium
+  input_case: exact
+  cwe: CWE-312
+  owasp: m2
+  masvs: storage-1
+
+# ─── Cryptography (6 rules) ──────────────────────────────────────────────────
+
+- id: ios_md5_hash
+  message: "MD5 used for hashing (weak)"
+  type: Regex
+  pattern: 'CC_MD5|CommonDigest.*MD5|\.md5\b'
+  severity: high
+  input_case: exact
+  cwe: CWE-327
+  owasp: m5
+  masvs: crypto-4
+
+- id: ios_sha1_hash
+  message: "SHA1 used for hashing (weak)"
+  type: Regex
+  pattern: 'CC_SHA1\b|CommonDigest.*SHA1'
+  severity: medium
+  input_case: exact
+  cwe: CWE-327
+  owasp: m5
+  masvs: crypto-4
+
+- id: ios_des_cipher
+  message: "DES encryption used (weak cipher)"
+  type: Regex
+  pattern: 'kCCAlgorithmDES|DES\b'
+  severity: critical
+  input_case: exact
+  cwe: CWE-327
+  owasp: m5
+  masvs: crypto-2
+
+- id: ios_ecb_mode
+  message: "ECB mode used for block cipher (insecure)"
+  type: Regex
+  pattern: 'kCCOptionECBMode|CCOptions.*ECB'
+  severity: high
+  input_case: exact
+  cwe: CWE-327
+  owasp: m5
+  masvs: crypto-2
+
+- id: ios_random_seed
+  message: "Insecure random number generation"
+  type: Regex
+  pattern: '\brand\(\)\b|arc4random_uniform|srand\b'
+  severity: medium
+  input_case: exact
+  cwe: CWE-330
+  owasp: m5
+  masvs: crypto-6
+
+- id: ios_static_key
+  message: "Static/hardcoded key in crypto operation"
+  type: Regex
+  pattern: 'kCCKeySizeAES128.*@"[^"]{16}"'
+  severity: high
+  input_case: exact
+  cwe: CWE-321
+  owasp: m5
+  masvs: crypto-1
+
+# ─── Injection / Code Execution (6 rules) ────────────────────────────────────
+
+- id: ios_nsstring_exec
+  message: "Dynamic code execution via NSString"
+  type: Regex
+  pattern: 'performSelector.*@selector|valueForKeyPath'
+  severity: medium
+  input_case: exact
+  cwe: CWE-470
+  owasp: m7
+  masvs: platform-2
+
+- id: ios_javascript_eval
+  message: "JavaScript eval in WebView"
+  type: Regex
+  pattern: 'evaluateJavaScript.*\+|evaluateScript.*\+'
+  severity: high
+  input_case: exact
+  cwe: CWE-79
+  owasp: m7
+  masvs: platform-6
+
+- id: ios_url_scheme_handling
+  message: "URL scheme handler without validation"
+  type: Regex
+  pattern: 'application.*openURL.*options|handleOpenURL'
+  severity: medium
+  input_case: exact
+  cwe: CWE-601
+  owasp: m1
+  masvs: platform-3
+
+- id: ios_universal_links
+  message: "Universal links implementation"
+  type: Regex
+  pattern: 'continueUserActivity.*NSUserActivityTypeBrowsingWeb'
+  severity: info
+  input_case: exact
+  cwe: ~
+  owasp: m1
+  masvs: platform-3
+
+- id: ios_pasteboard_untrusted
+  message: "Reading from pasteboard (potentially untrusted data)"
+  type: Regex
+  pattern: 'UIPasteboard\.general\.string|pasteboardChangedNotification'
+  severity: medium
+  input_case: exact
+  cwe: CWE-20
+  owasp: m1
+  masvs: platform-4
+
+- id: ios_xmlparser_xxe
+  message: "NSXMLParser may be vulnerable to XXE"
+  type: Regex
+  pattern: 'NSXMLParser\s*\*|XMLParser\b'
+  severity: medium
+  input_case: exact
+  cwe: CWE-611
+  owasp: m7
+  masvs: platform-2
+
+# ─── Authentication / Auth (6 rules) ─────────────────────────────────────────
+
+- id: ios_touchid_biometric
+  message: "Biometric authentication (TouchID/FaceID) used"
+  type: Regex
+  pattern: 'LAContext|evaluatePolicy.*LAPolicyDeviceOwnerAuthentication'
+  severity: info
+  input_case: exact
+  cwe: ~
+  owasp: m4
+  masvs: auth-8
+
+- id: ios_keychain_accessible_always
+  message: "Keychain item accessible without device lock"
+  type: Regex
+  pattern: 'kSecAttrAccessibleAlways[^W]'
+  severity: high
+  input_case: exact
+  cwe: CWE-522
+  owasp: m2
+  masvs: storage-1
+
+- id: ios_keychain_no_protection
+  message: "Keychain item with no access control"
+  type: Regex
+  pattern: 'SecItemAdd.*kSecAttrAccessible.*kSecAttrAccessibleAlways\b'
+  severity: high
+  input_case: exact
+  cwe: CWE-522
+  owasp: m2
+  masvs: storage-1
+
+- id: ios_hardcoded_endpoint
+  message: "Hardcoded API endpoint URL"
+  type: Regex
+  pattern: 'https://[a-zA-Z0-9\-\.]+\.[a-zA-Z]{2,}/api'
+  severity: info
+  input_case: lower
+  cwe: CWE-798
+  owasp: m2
+  masvs: storage-14
+
+- id: ios_no_jailbreak_check
+  message: "No jailbreak detection found (informational)"
+  type: Regex
+  pattern: 'jailbreak|cydia|substrate|MobileSubstrate'
+  severity: info
+  input_case: lower
+  cwe: ~
+  owasp: m8
+  masvs: resilience-1
+
+- id: ios_debugger_detection
+  message: "Debugger detection code found"
+  type: Regex
+  pattern: 'ptrace|P_TRACED|sysctl.*KERN_PROC'
+  severity: info
+  input_case: exact
+  cwe: ~
+  owasp: m8
+  masvs: resilience-2
+
+# ─── Privacy / PII (4 rules) ─────────────────────────────────────────────────
+
+- id: ios_contacts_access
+  message: "Contacts access"
+  type: Regex
+  pattern: 'CNContactStore|ABAddressBook'
+  severity: medium
+  input_case: exact
+  cwe: CWE-359
+  owasp: m2
+  masvs: storage-11
+
+- id: ios_location_access
+  message: "Location access"
+  type: Regex
+  pattern: 'CLLocationManager|requestWhenInUseAuthorization|requestAlwaysAuthorization'
+  severity: medium
+  input_case: exact
+  cwe: CWE-359
+  owasp: m2
+  masvs: storage-11
+
+- id: ios_camera_microphone
+  message: "Camera/microphone access"
+  type: Regex
+  pattern: 'AVCaptureDevice|requestAccess.*AVMediaType'
+  severity: info
+  input_case: exact
+  cwe: CWE-359
+  owasp: m2
+  masvs: storage-11
+
+- id: ios_idfa_tracking
+  message: "IDFA advertising tracking"
+  type: Regex
+  pattern: 'ASIdentifierManager|advertisingIdentifier'
+  severity: medium
+  input_case: exact
+  cwe: CWE-359
+  owasp: m2
+  masvs: storage-12
+
+# ─── IPC (4 rules) ───────────────────────────────────────────────────────────
+
+- id: ios_custom_url_scheme
+  message: "Custom URL scheme handler"
+  type: Regex
+  pattern: 'application.*open.*url.*options\s*:|handleOpenURL'
+  severity: medium
+  input_case: lower
+  cwe: CWE-926
+  owasp: m1
+  masvs: platform-3
+
+- id: ios_xpc_service
+  message: "XPC service communication"
+  type: Regex
+  pattern: 'NSXPCConnection|NSXPCInterface'
+  severity: info
+  input_case: exact
+  cwe: ~
+  owasp: m1
+  masvs: platform-7
+
+- id: ios_app_group_container
+  message: "App Group container (shared data)"
+  type: Regex
+  pattern: 'initWithSuiteName.*group\.|containerURLForSecurityApplicationGroupIdentifier'
+  severity: info
+  input_case: exact
+  cwe: CWE-200
+  owasp: m1
+  masvs: storage-8
+
+- id: ios_extension_data_sharing
+  message: "App extension data sharing"
+  type: Regex
+  pattern: 'NSExtensionContext|extensionContext'
+  severity: info
+  input_case: exact
+  cwe: ~
+  owasp: m1
+  masvs: platform-7
