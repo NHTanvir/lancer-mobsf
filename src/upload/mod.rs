@@ -13,6 +13,7 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::db::{insert_scan, Scan, ScanStatus};
 use crate::scanner::android;
+use crate::scanner::ios;
 
 pub async fn upload_handler(
     State(state): State<Arc<AppState>>,
@@ -117,9 +118,16 @@ pub async fn upload_handler(
                 .into_response();
         }
 
-        // Trigger async scan for APK files
+        // Trigger async scan based on file type
         if file_type == "apk" {
             android::trigger_scan(
+                scan_id.clone(),
+                state.db.clone(),
+                state.broadcast_tx.clone(),
+            )
+            .await;
+        } else if file_type == "ipa" {
+            ios::trigger_scan(
                 scan_id.clone(),
                 state.db.clone(),
                 state.broadcast_tx.clone(),
