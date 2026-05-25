@@ -110,10 +110,27 @@ pub async fn start_dynamic_session(
         emit("dynamic: APK installed successfully");
     }
 
-    // ── Step 4: Frida (stub) ─────────────────────────────────────────────────
+    // ── Step 4: Frida ───────────────────────────────────────────────────────
     let is_frida_running = if req.enable_frida {
-        emit("dynamic: Frida requested (stub - not yet implemented)");
-        false
+        if frida::FridaClient::is_available().await {
+            emit("dynamic: Frida available – running SSL bypass");
+            let frida_client = frida::FridaClient::new(frida::FridaDevice::Usb);
+            match frida::run_ssl_bypass(&frida_client, &package).await {
+                Ok(output) => {
+                    emit(&format!("dynamic: Frida SSL bypass output: {}", output.trim()));
+                    true
+                }
+                Err(e) => {
+                    warn!("dynamic: Frida SSL bypass failed: {}", e);
+                    emit(&format!("dynamic: Frida SSL bypass failed: {}", e));
+                    false
+                }
+            }
+        } else {
+            warn!("dynamic: Frida not found in PATH; skipping instrumentation");
+            emit("dynamic: Frida not available (install frida-tools)");
+            false
+        }
     } else {
         false
     };
