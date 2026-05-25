@@ -20,6 +20,8 @@ pub struct DynamicSessionState {
     pub is_frida_running: bool,
     pub is_proxy_running: bool,
     pub activity_tests: Vec<adb::ActivityTestResult>,
+    pub fs_delta: Option<adb::FsDelta>,
+    pub traffic_entries: Vec<traffic::TrafficEntry>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -30,6 +32,8 @@ pub struct DynamicScanRequest {
     pub enable_frida: bool,
     pub enable_proxy: bool,
     pub run_activity_tests: bool,
+    /// Directory to save captures (traffic, screenshots). Defaults to uploads/<scan_id>
+    pub capture_dir: Option<String>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -42,12 +46,16 @@ pub struct DynamicScanRequest {
 /// 1. Check adb availability + list devices
 /// 2. Load static scan result (uploads/<scan_id>/result.json)
 /// 3. Install the APK
-/// 4. Optionally start Frida (stub)
-/// 5. Optionally start proxy (stub)
-/// 6. Optionally test exported activities
-/// 7. Capture logcat
-/// 8. Take screenshot
-/// 9. Return DynamicSessionState
+/// 4. Filesystem snapshot (before)
+/// 5. Optionally start Frida
+/// 6. Optionally start mitmproxy + configure device proxy
+/// 7. Screenshot before activity tests
+/// 8. Optionally test exported activities (run app for ~30 s)
+/// 9. Screenshot after activity tests
+/// 10. Filesystem snapshot (after) + compute delta
+/// 11. Load traffic if proxy was running
+/// 12. Capture logcat
+/// 13. Return DynamicSessionState
 pub async fn start_dynamic_session(
     req: DynamicScanRequest,
     _db: &DbPool,
@@ -57,6 +65,16 @@ pub async fn start_dynamic_session(
         let _ = progress_tx.send(msg.to_string());
         info!("{}", msg);
     };
+
+    // Resolve capture directory
+    let capture_dir = req
+        .capture_dir
+        .clone()
+        .unwrap_or_else(|| format!("uploads/{}", req.scan_id));
+
+    tokio::fs::create_dir_all(&capture_dir)
+        .await
+        .with_context(|| format!("failed to create capture dir: {}", capture_dir))?;
 
     // ── Step 1: adb availability ─────────────────────────────────────────────
     emit("dynamic: checking adb availability");
@@ -69,7 +87,7 @@ pub async fn start_dynamic_session(
         bail!("no ADB devices connected");
     }
 
-    // Choose device: use requested serial or fall back to first connected device
+    // Choose device
     let device_serial = if let Some(ref serial) = req.device_serial {
         let found = devices.iter().any(|d| &d.serial == serial);
         if !found {
@@ -98,7 +116,7 @@ pub async fn start_dynamic_session(
     let package = scan_result.package_name.clone();
     let manifest = scan_result.manifest.clone();
 
-    // Find the APK path inside the upload directory
+    // Find the APK path
     let apk_path = find_apk_in_upload_dir(&req.scan_id).await?;
 
     // ── Step 3: install APK ──────────────────────────────────────────────────
@@ -110,7 +128,14 @@ pub async fn start_dynamic_session(
         emit("dynamic: APK installed successfully");
     }
 
-    // ── Step 4: Frida ───────────────────────────────────────────────────────
+    // ── Step 4: filesystem snapshot (before) ─────────────────────────────────
+    emit("dynamic: taking filesystem snapshot (before)");
+    let fs_before = client
+        .fs_snapshot("/data/data")
+        .await
+        .unwrap_or_default();
+
+    // ── Step 5: Frida ─────────────────────────────────────────────────────────
     let is_frida_running = if req.enable_frida {
         if frida::FridaClient::is_available().await {
             emit("dynamic: Frida available – running SSL bypass");
@@ -135,15 +160,46 @@ pub async fn start_dynamic_session(
         false
     };
 
-    // ── Step 5: proxy (stub) ─────────────────────────────────────────────────
+    // ── Step 6: mitmproxy ─────────────────────────────────────────────────────
+    let capture_file = std::path::PathBuf::from(format!("{}/traffic.flow", capture_dir));
+    let mut proxy = traffic::MitmProxy::new(8080, capture_file);
+
     let is_proxy_running = if req.enable_proxy {
-        emit("dynamic: traffic proxy requested (stub - not yet implemented)");
-        false
+        if traffic::MitmProxy::is_available().await {
+            emit("dynamic: starting mitmproxy");
+            match proxy.start().await {
+                Ok(()) => {
+                    // Give mitmdump a moment to bind
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                    // Configure device
+                    if let Err(e) = proxy.configure_device_proxy(&client).await {
+                        warn!("dynamic: could not set device proxy: {}", e);
+                    }
+                    emit("dynamic: mitmproxy running");
+                    true
+                }
+                Err(e) => {
+                    warn!("dynamic: failed to start mitmproxy: {}", e);
+                    emit(&format!("dynamic: mitmproxy start failed: {}", e));
+                    false
+                }
+            }
+        } else {
+            warn!("dynamic: mitmproxy/mitmdump not found in PATH; skipping proxy");
+            emit("dynamic: mitmproxy not available (install mitmproxy)");
+            false
+        }
     } else {
         false
     };
 
-    // ── Step 6: activity tests ───────────────────────────────────────────────
+    // ── Step 7: screenshot before activity tests ──────────────────────────────
+    emit("dynamic: taking screenshot (before)");
+    if let Err(e) = traffic::take_screenshot(&client, &req.scan_id, "before").await {
+        warn!("dynamic: screenshot (before) failed: {}", e);
+    }
+
+    // ── Step 8: activity tests (~30 s run window) ─────────────────────────────
     let activity_tests = if req.run_activity_tests {
         if let Some(ref mf) = manifest {
             emit("dynamic: testing exported activities");
@@ -152,13 +208,56 @@ pub async fn start_dynamic_session(
             results
         } else {
             warn!("dynamic: no manifest available for activity tests");
+            // Still wait ~30 s to capture traffic even if no activity tests
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
             Vec::new()
         }
+    } else {
+        // Wait 30 s so traffic/fs changes accumulate
+        if is_proxy_running || req.enable_proxy {
+            emit("dynamic: waiting 30 s for app interaction");
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        }
+        Vec::new()
+    };
+
+    // ── Step 9: screenshot after activity tests ───────────────────────────────
+    emit("dynamic: taking screenshot (after)");
+    if let Err(e) = traffic::take_screenshot(&client, &req.scan_id, "after").await {
+        warn!("dynamic: screenshot (after) failed: {}", e);
+    }
+
+    // ── Step 10: filesystem snapshot (after) + delta ──────────────────────────
+    emit("dynamic: taking filesystem snapshot (after)");
+    let fs_after = client
+        .fs_snapshot("/data/data")
+        .await
+        .unwrap_or_default();
+
+    let fs_delta = Some(adb::AdbClient::fs_delta(&fs_before, &fs_after));
+    emit(&format!(
+        "dynamic: fs delta – created:{} deleted:{} modified:{}",
+        fs_delta.as_ref().map(|d| d.created.len()).unwrap_or(0),
+        fs_delta.as_ref().map(|d| d.deleted.len()).unwrap_or(0),
+        fs_delta.as_ref().map(|d| d.modified.len()).unwrap_or(0),
+    ));
+
+    // ── Step 11: stop proxy + load traffic ────────────────────────────────────
+    let traffic_entries = if is_proxy_running {
+        // Clear device proxy before stopping
+        if let Err(e) = proxy.clear_device_proxy(&client).await {
+            warn!("dynamic: could not clear device proxy: {}", e);
+        }
+        proxy.stop().await.ok();
+        emit("dynamic: loading captured traffic");
+        proxy.load_traffic().await.unwrap_or_default()
     } else {
         Vec::new()
     };
 
-    // ── Step 7: capture logcat ───────────────────────────────────────────────
+    emit(&format!("dynamic: {} traffic entries captured", traffic_entries.len()));
+
+    // ── Step 12: capture logcat ───────────────────────────────────────────────
     emit("dynamic: capturing logcat");
     let logcat_path = format!("uploads/{}/logcat.txt", req.scan_id);
     match client.logcat(500).await {
@@ -169,19 +268,7 @@ pub async fn start_dynamic_session(
         Err(e) => warn!("dynamic: logcat capture failed: {}", e),
     }
 
-    // ── Step 8: screenshot ───────────────────────────────────────────────────
-    emit("dynamic: taking screenshot");
-    let screenshot_path = std::path::PathBuf::from(format!(
-        "uploads/{}/screenshot.png",
-        req.scan_id
-    ));
-    if let Err(e) = client.screencap(&screenshot_path).await {
-        warn!("dynamic: screencap failed (continuing): {}", e);
-    } else {
-        emit(&format!("dynamic: screenshot saved to {}", screenshot_path.display()));
-    }
-
-    // ── Step 9: return state ─────────────────────────────────────────────────
+    // ── Step 13: return state ─────────────────────────────────────────────────
     Ok(DynamicSessionState {
         scan_id: req.scan_id,
         device_serial,
@@ -189,6 +276,8 @@ pub async fn start_dynamic_session(
         is_frida_running,
         is_proxy_running,
         activity_tests,
+        fs_delta,
+        traffic_entries,
     })
 }
 

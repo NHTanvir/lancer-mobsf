@@ -229,6 +229,100 @@ impl AdbClient {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Filesystem snapshot / delta
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FsDelta {
+    pub created: Vec<String>,
+    pub deleted: Vec<String>,
+    pub modified: Vec<String>,
+}
+
+impl AdbClient {
+    /// Take a snapshot of the filesystem at `remote_path`.
+    ///
+    /// Runs `find <path> -type f -printf "%p %s %T@\n"` on the device and
+    /// returns the raw output lines.  Each line contains
+    /// `<path> <size_bytes> <mtime_unix>`.
+    pub async fn fs_snapshot(&self, remote_path: &str) -> Result<Vec<String>> {
+        // Use ls -la recursively as a fallback on devices without GNU find.
+        // GNU find with -printf is the preferred approach.
+        let cmd = format!(
+            "find {} -type f -printf \"%p %s %T@\\n\" 2>/dev/null || true",
+            remote_path
+        );
+        let raw = self.shell(&cmd).await.unwrap_or_default();
+        let lines: Vec<String> = raw
+            .lines()
+            .map(|l| l.to_string())
+            .filter(|l| !l.is_empty())
+            .collect();
+        Ok(lines)
+    }
+
+    /// Compute the delta between two filesystem snapshots.
+    pub fn fs_delta(before: &[String], after: &[String]) -> FsDelta {
+        use std::collections::HashMap;
+
+        // Parse "path size mtime" triples into a HashMap<path, (size, mtime)>
+        fn parse_snapshot(lines: &[String]) -> HashMap<String, (String, String)> {
+            let mut map = HashMap::new();
+            for line in lines {
+                let parts: Vec<&str> = line.splitn(3, ' ').collect();
+                if parts.len() >= 3 {
+                    map.insert(
+                        parts[0].to_string(),
+                        (parts[1].to_string(), parts[2].to_string()),
+                    );
+                } else if parts.len() == 2 {
+                    map.insert(
+                        parts[0].to_string(),
+                        (parts[1].to_string(), String::new()),
+                    );
+                } else if !line.is_empty() {
+                    map.insert(line.to_string(), (String::new(), String::new()));
+                }
+            }
+            map
+        }
+
+        let before_map = parse_snapshot(before);
+        let after_map = parse_snapshot(after);
+
+        let mut created = Vec::new();
+        let mut deleted = Vec::new();
+        let mut modified = Vec::new();
+
+        // Files in after but not in before → created
+        // Files in after that differ from before → modified
+        for (path, after_meta) in &after_map {
+            match before_map.get(path) {
+                None => created.push(path.clone()),
+                Some(before_meta) => {
+                    if before_meta != after_meta {
+                        modified.push(path.clone());
+                    }
+                }
+            }
+        }
+
+        // Files in before but not in after → deleted
+        for path in before_map.keys() {
+            if !after_map.contains_key(path) {
+                deleted.push(path.clone());
+            }
+        }
+
+        created.sort();
+        deleted.sort();
+        modified.sort();
+
+        FsDelta { created, deleted, modified }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Activity tester (Part B)
 // ─────────────────────────────────────────────────────────────────────────────
 

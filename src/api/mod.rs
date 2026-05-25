@@ -64,6 +64,86 @@ pub async fn get_screenshot_handler(
     }
 }
 
+/// GET /api/dynamic/:scan_id/traffic — return captured traffic as JSON array
+pub async fn get_traffic_handler(
+    Path(scan_id): Path<String>,
+) -> impl IntoResponse {
+    // Load from uploads/<scan_id>/traffic.flow (or .json / .har sibling)
+    let capture_file = std::path::PathBuf::from(format!("uploads/{}/traffic.flow", scan_id));
+    let proxy = crate::dynamic::traffic::MitmProxy::new(0, capture_file);
+    match proxy.load_traffic().await {
+        Ok(entries) => (StatusCode::OK, Json(json!(entries))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("failed to load traffic: {}", e)})),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/dynamic/:scan_id/screenshots — list all screenshot URLs for a scan
+pub async fn list_screenshots_handler(
+    Path(scan_id): Path<String>,
+) -> impl IntoResponse {
+    let dir = format!("uploads/{}/screenshots", scan_id);
+    match tokio::fs::read_dir(&dir).await {
+        Ok(mut entries) => {
+            let mut urls: Vec<serde_json::Value> = Vec::new();
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("png") {
+                    if let Some(fname) = path.file_name().and_then(|n| n.to_str()) {
+                        urls.push(json!({
+                            "filename": fname,
+                            "url": format!("/api/dynamic/{}/screenshots/{}", scan_id, fname),
+                        }));
+                    }
+                }
+            }
+            urls.sort_by(|a, b| {
+                a.get("filename")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .cmp(b.get("filename").and_then(|v| v.as_str()).unwrap_or(""))
+            });
+            (StatusCode::OK, Json(json!(urls))).into_response()
+        }
+        Err(_) => (
+            StatusCode::OK,
+            Json(json!([])),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/dynamic/:scan_id/screenshots/:filename — serve a specific screenshot PNG
+pub async fn get_named_screenshot_handler(
+    Path((scan_id, filename)): Path<(String, String)>,
+) -> impl IntoResponse {
+    // Sanitise filename: reject any path traversal
+    if filename.contains('/') || filename.contains('\\') || filename.contains("..") {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "invalid filename"})),
+        )
+            .into_response();
+    }
+    let path = format!("uploads/{}/screenshots/{}", scan_id, filename);
+    match tokio::fs::read(&path).await {
+        Ok(bytes) => axum::response::Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "image/png")
+            .body(axum::body::Body::from(bytes))
+            .unwrap()
+            .into_response(),
+        Err(_) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "screenshot not found"})),
+        )
+            .into_response(),
+    }
+}
+
 /// GET /api/scan/:id - return scan status as JSON
 pub async fn get_scan_handler(
     Path(scan_id): Path<String>,
