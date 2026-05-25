@@ -3,6 +3,7 @@ pub mod apk;
 pub mod apkid;
 pub mod binary;
 pub mod cert;
+pub mod domain_reputation;
 pub mod jadx;
 pub mod manifest;
 pub mod permissions;
@@ -259,6 +260,21 @@ pub async fn scan_apk(
     {
         let firebase_findings = secrets::check_firebase_urls(&strings_found).await;
         all_findings.extend(firebase_findings);
+    }
+
+    // Step 9e: Domain reputation check (Google Safe Browsing)
+    broadcast(progress_tx, scan_id, "Checking domain reputation...", 87);
+    {
+        let urls_to_check = domain_reputation::extract_urls_from_strings(&strings_found);
+        match domain_reputation::check_urls(&urls_to_check).await {
+            Ok(matches) => {
+                let rep_findings = domain_reputation::safe_browsing_findings(&matches);
+                all_findings.extend(rep_findings);
+            }
+            Err(e) => {
+                tracing::warn!("Safe Browsing check failed: {}", e);
+            }
+        }
     }
 
     // Step 10: Threat intelligence (async, may be skipped if no API keys)
