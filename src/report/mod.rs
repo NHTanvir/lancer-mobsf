@@ -38,13 +38,30 @@ const REPORT_TEMPLATE: &str = r#"
     .attack-vec { color: #ffa657; }
     .action-item { color: #3fb950; }
     .cve-table td { font-size: 0.9em; }
+    .risk-score { display: inline-block; font-size: 2em; font-weight: bold; padding: 8px 20px; border-radius: 8px; margin: 4px 0; }
+    .risk-high { background: #3d1a1a; color: #ff7b7b; }
+    .risk-medium { background: #3d351a; color: #e3b341; }
+    .risk-low { background: #1a3d1a; color: #3fb950; }
+    .check-yes { color: #3fb950; }
+    .check-no { color: #ff7b7b; }
+    .debug-warn { background: #3d1a1a; color: #ff7b7b; padding: 4px 8px; border-radius: 3px; display: inline-block; }
   </style>
 </head>
 <body>
   <h1>lancer-mobsf Security Report</h1>
-  <p><strong>Package:</strong> {{ package_name }} v{{ version_name }}<br>
-     <strong>SHA256:</strong> {{ sha256 }}<br>
-     <strong>Scan ID:</strong> {{ scan_id }}</p>
+  <p>
+    <strong>Package:</strong> {{ package_name }} v{{ version_name }}<br>
+    <strong>SHA256:</strong> <code>{{ sha256 }}</code><br>
+    <strong>Scan ID:</strong> {{ scan_id }}<br>
+    <strong>Risk Score:</strong>
+    <span class="risk-score {% if risk_score >= 70 %}risk-high{% elif risk_score >= 40 %}risk-medium{% else %}risk-low{% endif %}">
+      {{ risk_score }}/100
+    </span>
+    &nbsp;
+    {% if masvs_categories %}
+    <strong>MASVS Score:</strong> {{ overall_score_pct }}% ({{ overall_status }})
+    {% endif %}
+  </p>
 
   <div class="summary-grid">
     <div class="summary-box critical"><div class="count">{{ counts.critical }}</div>Critical</div>
@@ -53,6 +70,69 @@ const REPORT_TEMPLATE: &str = r#"
     <div class="summary-box low"><div class="count">{{ counts.low }}</div>Low</div>
     <div class="summary-box info"><div class="count">{{ counts.info }}</div>Info</div>
   </div>
+
+  {% if cert_info %}
+  <h2>Certificate Details</h2>
+  <table>
+    <tr><th>Field</th><th>Value</th></tr>
+    <tr><td>Subject</td><td>{{ cert_info.subject }}</td></tr>
+    <tr><td>Issuer</td><td>{{ cert_info.issuer }}</td></tr>
+    <tr><td>Serial</td><td>{{ cert_info.serial }}</td></tr>
+    <tr><td>Not Before</td><td>{{ cert_info.not_before }}</td></tr>
+    <tr><td>Not After</td><td>{{ cert_info.not_after }}</td></tr>
+    <tr><td>SHA-256 Fingerprint</td><td><code>{{ cert_info.sha256_fingerprint }}</code></td></tr>
+    <tr><td>Algorithm</td><td>{{ cert_info.signature_algorithm }}</td></tr>
+    <tr><td>Self-Signed</td><td>{% if cert_info.is_self_signed %}<span class="check-no">Yes</span>{% else %}<span class="check-yes">No</span>{% endif %}</td></tr>
+    <tr><td>Debug Certificate</td><td>{% if cert_info.is_debug_cert %}<span class="debug-warn">WARNING: Debug certificate detected</span>{% else %}<span class="check-yes">No</span>{% endif %}</td></tr>
+  </table>
+  {% endif %}
+
+  {% if exported_activities or exported_services or exported_receivers %}
+  <h2>Exported Components</h2>
+  <table>
+    <tr><th>Type</th><th>Name</th><th>Permission</th></tr>
+    {% for c in exported_activities %}
+    <tr>
+      <td>Activity</td>
+      <td>{{ c.name }}</td>
+      <td>{{ c.permission | default("none") }}</td>
+    </tr>
+    {% endfor %}
+    {% for c in exported_services %}
+    <tr>
+      <td>Service</td>
+      <td>{{ c.name }}</td>
+      <td>{{ c.permission | default("none") }}</td>
+    </tr>
+    {% endfor %}
+    {% for c in exported_receivers %}
+    <tr>
+      <td>Receiver</td>
+      <td>{{ c.name }}</td>
+      <td>{{ c.permission | default("none") }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+
+  {% if elf_hardenings %}
+  <h2>Native Library Hardening</h2>
+  <table>
+    <tr><th>Library</th><th>Arch</th><th>PIE</th><th>NX</th><th>Canary</th><th>RELRO</th><th>Fortify</th><th>Stripped</th></tr>
+    {% for e in elf_hardenings %}
+    <tr>
+      <td>{{ e.path }}</td>
+      <td>{{ e.arch }}</td>
+      <td>{% if e.pie %}<span class="check-yes">Yes</span>{% else %}<span class="check-no">No</span>{% endif %}</td>
+      <td>{% if e.nx %}<span class="check-yes">Yes</span>{% else %}<span class="check-no">No</span>{% endif %}</td>
+      <td>{% if e.stack_canary %}<span class="check-yes">Yes</span>{% else %}<span class="check-no">No</span>{% endif %}</td>
+      <td>{{ e.relro }}</td>
+      <td>{% if e.fortify %}<span class="check-yes">Yes</span>{% else %}<span class="check-no">No</span>{% endif %}</td>
+      <td>{% if e.stripped %}<span class="check-yes">Yes</span>{% else %}<span class="check-no">No</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
 
   {% if ai_triage %}
   <h2>AI Triage Analysis</h2>
@@ -211,12 +291,49 @@ pub fn render_html_report_with_masvs(result: &AndroidScanResult, masvs: &MasvsRe
     let overall_status = format!("{}", masvs.overall_status);
     let ai_triage_val = serde_json::to_value(&result.ai_triage)?;
     let cve_results_val = serde_json::to_value(&result.cve_results)?;
+    let cert_info_val = serde_json::to_value(&result.cert_info)?;
+    let elf_hardenings_val = serde_json::to_value(&result.elf_hardenings)?;
+
+    // Build exported component lists from manifest
+    let (exported_activities, exported_services, exported_receivers) =
+        if let Some(ref manifest) = result.manifest {
+            let acts: Vec<serde_json::Value> = manifest
+                .activities
+                .iter()
+                .filter(|c| c.exported.unwrap_or(false))
+                .map(|c| serde_json::json!({"name": c.name, "permission": c.permission}))
+                .collect();
+            let svcs: Vec<serde_json::Value> = manifest
+                .services
+                .iter()
+                .filter(|c| c.exported.unwrap_or(false))
+                .map(|c| serde_json::json!({"name": c.name, "permission": c.permission}))
+                .collect();
+            let rcvs: Vec<serde_json::Value> = manifest
+                .receivers
+                .iter()
+                .filter(|c| c.exported.unwrap_or(false))
+                .map(|c| serde_json::json!({"name": c.name, "permission": c.permission}))
+                .collect();
+            (
+                serde_json::Value::Array(acts),
+                serde_json::Value::Array(svcs),
+                serde_json::Value::Array(rcvs),
+            )
+        } else {
+            (
+                serde_json::Value::Array(vec![]),
+                serde_json::Value::Array(vec![]),
+                serde_json::Value::Array(vec![]),
+            )
+        };
 
     let html = tmpl.render(context! {
         package_name => result.package_name,
         version_name => result.version_name,
         sha256 => result.sha256,
         scan_id => result.scan_id,
+        risk_score => result.risk_score,
         counts => counts,
         findings => findings_val,
         masvs_categories => masvs_cats,
@@ -224,6 +341,11 @@ pub fn render_html_report_with_masvs(result: &AndroidScanResult, masvs: &MasvsRe
         overall_status => overall_status,
         ai_triage => ai_triage_val,
         cve_results => cve_results_val,
+        cert_info => cert_info_val,
+        elf_hardenings => elf_hardenings_val,
+        exported_activities => exported_activities,
+        exported_services => exported_services,
+        exported_receivers => exported_receivers,
     })?;
 
     Ok(html)

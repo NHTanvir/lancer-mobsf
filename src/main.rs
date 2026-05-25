@@ -159,6 +159,10 @@ async fn run_server(port: u16, db_path: &str) -> anyhow::Result<()> {
         // AI triage + CVE
         .route("/api/scan/:id/triage", post(api::post_triage_handler))
         .route("/api/scan/:id/cves", get(api::get_cves_handler))
+        // Frida script generation
+        .route("/api/scan/:id/generate-frida", post(api::generate_frida_handler))
+        .route("/api/scan/:id/frida-scripts", get(api::list_frida_scripts_handler))
+        .route("/api/scan/:id/frida-scripts/:filename", get(api::get_frida_script_handler))
         // WebSocket
         .route("/ws/scan/:scan_id", get(ws::ws_handler))
         // Dynamic analysis

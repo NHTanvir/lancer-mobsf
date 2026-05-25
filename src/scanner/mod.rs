@@ -2,6 +2,7 @@
 pub mod ai_triage;
 pub mod android;
 pub mod cve;
+pub mod frida_generator;
 pub mod ios;
 pub mod threat_intel;
 

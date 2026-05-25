@@ -910,6 +910,194 @@ pub async fn get_cves_handler(
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Frida script generation endpoints
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct GenerateFridaBody {
+    pub intent: String,
+    pub class_filter: Option<String>,
+    pub method_filter: Option<String>,
+}
+
+/// Slug-ify a string for use as a filename component.
+fn intent_to_slug(intent: &str) -> String {
+    intent
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '_' })
+        .collect::<String>()
+        .split('_')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("_")
+        .chars()
+        .take(40)
+        .collect()
+}
+
+/// POST /api/scan/:id/generate-frida
+/// Body: {"intent": "...", "class_filter": "...", "method_filter": "..."}
+/// Returns GeneratedFridaScript JSON.
+pub async fn generate_frida_handler(
+    Path(scan_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<GenerateFridaBody>,
+) -> impl IntoResponse {
+    // Verify scan exists
+    match get_scan(&state.db, &scan_id).await {
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "scan not found", "scan_id": scan_id})),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": format!("database error: {}", e)})),
+            )
+                .into_response()
+        }
+        Ok(Some(_)) => {}
+    }
+
+    // Load scan result to get class inventory
+    let result = match load_result(&scan_id).await {
+        Ok(r) => r,
+        Err(e) => {
+            return (StatusCode::NOT_FOUND, Json(json!({"error": e}))).into_response()
+        }
+    };
+
+    let req = crate::scanner::frida_generator::FridaGeneratorRequest {
+        scan_id: scan_id.clone(),
+        intent: body.intent.clone(),
+        class_filter: body.class_filter.clone(),
+        method_filter: body.method_filter.clone(),
+    };
+
+    match crate::scanner::frida_generator::generate_frida_script(&req, &result.class_inventory)
+        .await
+    {
+        Ok(Some(script)) => {
+            // Persist the generated script
+            let scripts_dir = format!("uploads/{}/frida_scripts", scan_id);
+            let _ = tokio::fs::create_dir_all(&scripts_dir).await;
+            let ts = chrono::Utc::now().timestamp();
+            let slug = intent_to_slug(&body.intent);
+            let filename = format!("{}_{}.js", ts, slug);
+            let script_path = format!("{}/{}", scripts_dir, filename);
+            let _ = tokio::fs::write(&script_path, &script.script_content).await;
+
+            (StatusCode::OK, Json(json!(script))).into_response()
+        }
+        Ok(None) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "error": "Frida script generation unavailable. Ensure ANTHROPIC_API_KEY is set.",
+                "scan_id": scan_id,
+            })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("generation error: {}", e)})),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/scan/:id/frida-scripts
+/// Returns list of previously generated scripts for this scan.
+pub async fn list_frida_scripts_handler(
+    Path(scan_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    // Verify scan exists
+    match get_scan(&state.db, &scan_id).await {
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "scan not found", "scan_id": scan_id})),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": format!("database error: {}", e)})),
+            )
+                .into_response()
+        }
+        Ok(Some(_)) => {}
+    }
+
+    let dir = format!("uploads/{}/frida_scripts", scan_id);
+    match tokio::fs::read_dir(&dir).await {
+        Ok(mut entries) => {
+            let mut scripts: Vec<serde_json::Value> = Vec::new();
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("js") {
+                    if let Some(fname) = path.file_name().and_then(|n| n.to_str()) {
+                        scripts.push(json!({
+                            "filename": fname,
+                            "url": format!("/api/scan/{}/frida-scripts/{}", scan_id, fname),
+                        }));
+                    }
+                }
+            }
+            scripts.sort_by(|a, b| {
+                a.get("filename")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .cmp(b.get("filename").and_then(|v| v.as_str()).unwrap_or(""))
+            });
+            (StatusCode::OK, Json(json!({"scan_id": scan_id, "scripts": scripts}))).into_response()
+        }
+        Err(_) => (
+            StatusCode::OK,
+            Json(json!({"scan_id": scan_id, "scripts": []})),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/scan/:id/frida-scripts/:filename
+/// Download a specific generated Frida script.
+pub async fn get_frida_script_handler(
+    Path((scan_id, filename)): Path<(String, String)>,
+) -> impl IntoResponse {
+    // Sanitise filename
+    if filename.contains('/') || filename.contains('\\') || filename.contains("..") {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "invalid filename"})),
+        )
+            .into_response();
+    }
+    let path = format!("uploads/{}/frida_scripts/{}", scan_id, filename);
+    match tokio::fs::read_to_string(&path).await {
+        Ok(content) => axum::response::Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "application/javascript; charset=utf-8")
+            .header(
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{}\"", filename),
+            )
+            .body(axum::body::Body::from(content))
+            .unwrap()
+            .into_response(),
+        Err(_) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "script not found", "filename": filename})),
+        )
+            .into_response(),
+    }
+}
+
 /// GET /api/v1/download_pdf?hash=<sha256> — download PDF (MobSF compatible)
 pub async fn v1_download_pdf_handler(
     Query(params): Query<HashQuery>,

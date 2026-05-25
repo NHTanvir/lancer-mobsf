@@ -13,11 +13,13 @@ pub mod tracker;
 use crate::scanner::ScanFinding;
 use crate::scanner::ai_triage::{self, TriageSummary};
 use crate::scanner::cve::{self, LibraryCveResult};
+use crate::scanner::frida_generator::{ClassInfo, MethodInfo};
 use crate::scanner::threat_intel::{self, ThreatIntelResult};
 use crate::db::{DbPool, ScanStatus};
 use crate::masvs::MasvsReport;
 use std::path::Path;
 use anyhow::Result;
+use regex::Regex;
 
 /// Compiled android rules embedded at build time.
 const ANDROID_RULES_YAML: &str = include_str!("../../../rules/android_rules.yaml");
@@ -40,6 +42,8 @@ pub struct AndroidScanResult {
     pub threat_intel: Option<ThreatIntelResult>,
     pub ai_triage: Option<TriageSummary>,
     pub cve_results: Vec<LibraryCveResult>,
+    /// Class/method inventory extracted from decompiled Java source (populated if jadx succeeded).
+    pub class_inventory: Vec<ClassInfo>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -278,6 +282,13 @@ pub async fn scan_apk(
     let masvs_report = Some(crate::masvs::compute_masvs_score(&all_findings));
     let risk_score = crate::masvs::overall_risk_score(&all_findings);
 
+    // Step 14: Extract class/method inventory from decompiled Java files
+    let class_inventory = if jadx_success && sources_dir.is_dir() {
+        extract_class_inventory(&java_files)
+    } else {
+        Vec::new()
+    };
+
     let result = AndroidScanResult {
         scan_id: scan_id.to_string(),
         package_name,
@@ -295,6 +306,7 @@ pub async fn scan_apk(
         threat_intel: threat_intel_result,
         ai_triage,
         cve_results,
+        class_inventory,
     };
 
     // Step 9: Persist result.json
@@ -371,4 +383,130 @@ fn find_apk_in_dir(dir: &str) -> Option<std::path::PathBuf> {
         }
     }
     None
+}
+
+/// Extract class/method inventory from decompiled Java source files.
+///
+/// Uses best-effort regex parsing (not a full Java parser).
+pub fn extract_class_inventory(java_files: &[std::path::PathBuf]) -> Vec<ClassInfo> {
+    // Compile patterns once
+    let class_re = Regex::new(
+        r"(?:public|private|protected)?\s+(?:abstract\s+|final\s+)?class\s+(\w+)"
+    )
+    .unwrap_or_else(|_| Regex::new(r"class\s+(\w+)").unwrap());
+
+    let method_re = Regex::new(
+        r"(?:public|private|protected)\s+(static\s+)?(\w+(?:<\w+>)?)\s+(\w+)\s*\(([^)]*)\)"
+    )
+    .unwrap_or_else(|_| Regex::new(r"void\s+(\w+)\s*\(\)").unwrap());
+
+    let mut inventory: Vec<ClassInfo> = Vec::new();
+
+    for file_path in java_files.iter().take(500) {
+        let source = match std::fs::read_to_string(file_path) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+
+        // Derive package from file path: com/example/Foo.java -> com.example
+        let package = {
+            let mut pkg = String::new();
+            // Try to find package declaration in source first
+            for line in source.lines().take(5) {
+                let line = line.trim();
+                if line.starts_with("package ") {
+                    pkg = line
+                        .trim_start_matches("package ")
+                        .trim_end_matches(';')
+                        .trim()
+                        .to_string();
+                    break;
+                }
+            }
+            // Fall back to path-based package
+            if pkg.is_empty() {
+                if let Some(parent) = file_path.parent() {
+                    let path_str = parent.to_string_lossy();
+                    // Find the java/ or sources/ root in the path
+                    let cleaned = if let Some(pos) = path_str.find("sources/") {
+                        &path_str[pos + 8..]
+                    } else if let Some(pos) = path_str.find("java/") {
+                        &path_str[pos + 5..]
+                    } else {
+                        path_str.as_ref()
+                    };
+                    pkg = cleaned.replace(['/', '\\'], ".").trim_matches('.').to_string();
+                }
+            }
+            pkg
+        };
+
+        // Extract class name
+        let class_name = if let Some(cap) = class_re.captures(&source) {
+            let simple = cap.get(1).map(|m| m.as_str()).unwrap_or("Unknown").to_string();
+            if package.is_empty() {
+                simple
+            } else {
+                format!("{}.{}", package, simple)
+            }
+        } else {
+            // Use filename as class name
+            let stem = file_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("Unknown")
+                .to_string();
+            if package.is_empty() {
+                stem
+            } else {
+                format!("{}.{}", package, stem)
+            }
+        };
+
+        // Extract methods
+        let mut methods: Vec<MethodInfo> = Vec::new();
+        for cap in method_re.captures_iter(&source) {
+            let is_static = cap.get(1).is_some();
+            let return_type = cap.get(2).map(|m| m.as_str()).unwrap_or("void").to_string();
+            let name = cap.get(3).map(|m| m.as_str()).unwrap_or("").to_string();
+            let params_str = cap.get(4).map(|m| m.as_str()).unwrap_or("").to_string();
+
+            // Skip constructors and common noise
+            if name.is_empty() || name == "class" || name == "interface" || name == "extends" {
+                continue;
+            }
+
+            let params: Vec<String> = params_str
+                .split(',')
+                .map(|p| {
+                    // Keep only the type part (last word before parameter name, or full if one token)
+                    let trimmed = p.trim();
+                    let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                    if parts.len() >= 2 {
+                        parts[parts.len() - 2].to_string()
+                    } else if !parts.is_empty() {
+                        parts[0].to_string()
+                    } else {
+                        String::new()
+                    }
+                })
+                .filter(|s| !s.is_empty())
+                .collect();
+
+            methods.push(MethodInfo {
+                name,
+                return_type,
+                params,
+                is_static,
+            });
+        }
+
+        inventory.push(ClassInfo {
+            class_name,
+            methods,
+            package,
+        });
+    }
+
+    inventory
 }
