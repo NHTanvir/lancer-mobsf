@@ -408,6 +408,69 @@ pub fn scan_for_secrets(content: &str, file_path: &str) -> Vec<ScanFinding> {
     findings
 }
 
+/// Check Firebase Realtime Database URLs for public read access
+/// by hitting the <url>/.json endpoint.
+pub async fn check_firebase_urls(strings: &[String]) -> Vec<ScanFinding> {
+    let firebase_re = match regex::Regex::new(r"https://[a-z0-9-]+\.firebaseio\.com") {
+        Ok(r) => r,
+        Err(_) => return Vec::new(),
+    };
+
+    // Collect unique Firebase URLs
+    let mut urls: Vec<String> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for s in strings {
+        for m in firebase_re.find_iter(s) {
+            let url = m.as_str().to_string();
+            if seen.insert(url.clone()) {
+                urls.push(url);
+            }
+        }
+    }
+
+    let mut findings: Vec<ScanFinding> = Vec::new();
+
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return findings,
+    };
+
+    for url in urls {
+        let check_url = format!("{}/.json", url.trim_end_matches('/'));
+        match client.get(&check_url).send().await {
+            Ok(resp) if resp.status().is_success() => {
+                match resp.text().await {
+                    Ok(body) if body != "null" && !body.is_empty() => {
+                        findings.push(ScanFinding {
+                            rule_id: "firebase_public_db".to_string(),
+                            title: format!("Firebase database is publicly readable: {}", url),
+                            severity: "high".to_string(),
+                            description: format!(
+                                "Firebase Realtime Database at '{}' is publicly readable. \
+                                 The /.json endpoint returned non-null data without authentication.",
+                                url
+                            ),
+                            file_path: None,
+                            line_number: None,
+                            cwe: Some("CWE-284".to_string()),
+                            owasp: Some("m2".to_string()),
+                            masvs: Some("storage-5".to_string()),
+                            evidence: Some(check_url),
+                        });
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
+    findings
+}
+
 /// Scan all Java/Kotlin/XML files in a directory tree for hardcoded secrets.
 pub async fn scan_secrets_in_directory(dir: &Path) -> Vec<ScanFinding> {
     let mut findings: Vec<ScanFinding> = Vec::new();

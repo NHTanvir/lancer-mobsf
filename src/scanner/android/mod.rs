@@ -11,6 +11,7 @@ pub mod secrets;
 pub mod tracker;
 
 use crate::scanner::ScanFinding;
+use crate::scanner::threat_intel::{self, ThreatIntelResult};
 use crate::db::{DbPool, ScanStatus};
 use crate::masvs::MasvsReport;
 use std::path::Path;
@@ -34,6 +35,7 @@ pub struct AndroidScanResult {
     pub finding_counts: FindingCounts,
     pub masvs_report: Option<MasvsReport>,
     pub risk_score: u8,
+    pub threat_intel: Option<ThreatIntelResult>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -204,7 +206,44 @@ pub async fn scan_apk(
         all_findings.extend(tracker_findings);
     }
 
-    // Step 10: Generate report (sort findings by severity)
+    // Step 9b: Network Security Config analysis
+    {
+        let nsc_path = extracted.dir.join("res/xml/network_security_config.xml");
+        if nsc_path.exists() {
+            if let Ok(nsc_xml) = tokio::fs::read_to_string(&nsc_path).await {
+                match manifest::parse_network_security_config(&nsc_xml) {
+                    Ok(nsc) => {
+                        let nsc_findings = manifest::analyze_network_security_config(&nsc);
+                        all_findings.extend(nsc_findings);
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to parse NSC: {}", e);
+                    }
+                }
+            }
+        }
+    }
+
+    // Step 9c: Firebase database URL public access check
+    {
+        let firebase_findings = secrets::check_firebase_urls(&strings_found).await;
+        all_findings.extend(firebase_findings);
+    }
+
+    // Step 10: Threat intelligence (async, may be skipped if no API keys)
+    broadcast(progress_tx, scan_id, "Querying threat intelligence...", 88);
+    let threat_intel_result = match threat_intel::analyze_threat_intel(&sha256).await {
+        Ok((ti_result, ti_findings)) => {
+            all_findings.extend(ti_findings);
+            Some(ti_result)
+        }
+        Err(e) => {
+            tracing::warn!("Threat intel query failed: {}", e);
+            None
+        }
+    };
+
+    // Step 11: Generate report (sort findings by severity)
     broadcast(progress_tx, scan_id, "Generating report...", 90);
     all_findings.sort_by_key(|f| severity_order(f.severity.as_str()));
 
@@ -228,6 +267,7 @@ pub async fn scan_apk(
         finding_counts,
         masvs_report,
         risk_score,
+        threat_intel: threat_intel_result,
     };
 
     // Step 9: Persist result.json

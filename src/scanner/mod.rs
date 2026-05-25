@@ -1,6 +1,7 @@
 // scanner module - Android and iOS static analysis
 pub mod android;
 pub mod ios;
+pub mod threat_intel;
 
 /// Unified finding type produced by all scanner sub-modules.
 /// This is the *scan-time* finding (not the DB model).

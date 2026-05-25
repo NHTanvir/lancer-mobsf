@@ -1334,3 +1334,193 @@ pub fn analyze_manifest(manifest: &ParsedManifest) -> Vec<ScanFinding> {
 
     findings
 }
+
+// ---------------------------------------------------------------------------
+// Network Security Config parser
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct NetworkSecurityConfig {
+    pub allows_cleartext: Option<bool>,
+    pub pin_sets: Vec<PinSet>,
+    pub domain_configs: Vec<DomainConfig>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PinSet {
+    pub expiration: Option<String>,
+    pub pins: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DomainConfig {
+    pub domain: String,
+    pub cleartext_traffic_permitted: Option<bool>,
+    pub pin_set: Option<PinSet>,
+}
+
+/// Parse a Network Security Config XML (plain text XML, not binary AXML).
+/// Uses simple string/regex matching since the NSC format is well-known and simple.
+pub fn parse_network_security_config(xml: &str) -> Result<NetworkSecurityConfig> {
+    let mut allows_cleartext: Option<bool> = None;
+    let mut pin_sets: Vec<PinSet> = Vec::new();
+    let mut domain_configs: Vec<DomainConfig> = Vec::new();
+
+    // Check base-config for cleartextTrafficPermitted
+    // Matches: <base-config cleartextTrafficPermitted="true">
+    let base_re = regex::Regex::new(
+        r#"(?i)<base-config[^>]*cleartextTrafficPermitted\s*=\s*"([^"]+)""#,
+    )
+    .unwrap();
+    if let Some(cap) = base_re.captures(xml) {
+        let val = cap[1].trim().to_lowercase();
+        allows_cleartext = Some(val == "true");
+    }
+
+    // Check domain-config blocks
+    // Simple approach: find <domain-config ... > blocks and extract domains and cleartext
+    let domain_block_re = regex::Regex::new(
+        r#"(?is)<domain-config([^>]*)>(.*?)</domain-config>"#,
+    )
+    .unwrap();
+    let domain_tag_re = regex::Regex::new(r#"(?i)<domain[^>]*>([^<]+)</domain>"#).unwrap();
+    let cleartext_attr_re = regex::Regex::new(
+        r#"(?i)cleartextTrafficPermitted\s*=\s*"([^"]+)""#,
+    )
+    .unwrap();
+    let pin_set_re = regex::Regex::new(r#"(?is)<pin-set([^>]*)>(.*?)</pin-set>"#).unwrap();
+    let pin_re = regex::Regex::new(r#"(?i)<pin[^>]*>([^<]+)</pin>"#).unwrap();
+    let expiry_re = regex::Regex::new(r#"(?i)expiration\s*=\s*"([^"]+)""#).unwrap();
+
+    for cap in domain_block_re.captures_iter(xml) {
+        let attrs_str = &cap[1];
+        let block_body = &cap[2];
+
+        // Extract cleartext setting for this domain-config
+        let cleartext = cleartext_attr_re
+            .captures(attrs_str)
+            .map(|c| c[1].trim().to_lowercase() == "true");
+
+        // Extract domain names
+        let domains: Vec<String> = domain_tag_re
+            .captures_iter(block_body)
+            .map(|c| c[1].trim().to_string())
+            .collect();
+
+        // Extract pin-set within this domain-config
+        let pin_set_opt = pin_set_re.captures(block_body).map(|ps_cap| {
+            let ps_attrs = &ps_cap[1];
+            let ps_body = &ps_cap[2];
+            let expiration = expiry_re
+                .captures(ps_attrs)
+                .map(|e| e[1].to_string());
+            let pins: Vec<String> = pin_re
+                .captures_iter(ps_body)
+                .map(|p| p[1].trim().to_string())
+                .collect();
+            PinSet { expiration, pins }
+        });
+
+        for domain in domains {
+            domain_configs.push(DomainConfig {
+                domain,
+                cleartext_traffic_permitted: cleartext,
+                pin_set: pin_set_opt.clone(),
+            });
+        }
+    }
+
+    // Parse global pin-sets (outside domain-config, directly under network-security-config)
+    // We strip domain-config blocks first to avoid double-counting
+    let stripped = domain_block_re.replace_all(xml, "");
+    for ps_cap in pin_set_re.captures_iter(&stripped) {
+        let ps_attrs = &ps_cap[1];
+        let ps_body = &ps_cap[2];
+        let expiration = expiry_re.captures(ps_attrs).map(|e| e[1].to_string());
+        let pins: Vec<String> = pin_re
+            .captures_iter(ps_body)
+            .map(|p| p[1].trim().to_string())
+            .collect();
+        pin_sets.push(PinSet { expiration, pins });
+    }
+
+    Ok(NetworkSecurityConfig {
+        allows_cleartext,
+        pin_sets,
+        domain_configs,
+    })
+}
+
+/// Analyze a parsed NetworkSecurityConfig and return security findings.
+pub fn analyze_network_security_config(config: &NetworkSecurityConfig) -> Vec<ScanFinding> {
+    let mut findings: Vec<ScanFinding> = Vec::new();
+
+    // Count all pin-sets (both global and per-domain)
+    let total_pin_sets = config.pin_sets.len()
+        + config
+            .domain_configs
+            .iter()
+            .filter(|d| d.pin_set.is_some())
+            .count();
+
+    if total_pin_sets == 0 {
+        findings.push(ScanFinding {
+            rule_id: "nsc_no_certificate_pinning".to_string(),
+            title: "No certificate pinning configured".to_string(),
+            severity: "low".to_string(),
+            description: "The Network Security Config defines no certificate pin-sets. \
+                Certificate pinning helps prevent MitM attacks."
+                .to_string(),
+            file_path: Some("res/xml/network_security_config.xml".to_string()),
+            line_number: None,
+            cwe: Some("CWE-295".to_string()),
+            owasp: Some("m3".to_string()),
+            masvs: Some("network-4".to_string()),
+            evidence: None,
+        });
+    }
+
+    // Cleartext in base-config
+    if config.allows_cleartext == Some(true) {
+        findings.push(ScanFinding {
+            rule_id: "nsc_cleartext_traffic_base".to_string(),
+            title: "Network Security Config permits cleartext traffic (base-config)".to_string(),
+            severity: "medium".to_string(),
+            description: "The base-config in network_security_config.xml has \
+                cleartextTrafficPermitted=\"true\". This allows HTTP connections for all domains."
+                .to_string(),
+            file_path: Some("res/xml/network_security_config.xml".to_string()),
+            line_number: None,
+            cwe: Some("CWE-319".to_string()),
+            owasp: Some("m3".to_string()),
+            masvs: Some("network-1".to_string()),
+            evidence: Some("cleartextTrafficPermitted=\"true\" in base-config".to_string()),
+        });
+    }
+
+    // Cleartext in domain-configs
+    for dc in &config.domain_configs {
+        if dc.cleartext_traffic_permitted == Some(true) {
+            findings.push(ScanFinding {
+                rule_id: "nsc_cleartext_traffic_domain".to_string(),
+                title: format!(
+                    "Network Security Config permits cleartext for domain: {}",
+                    dc.domain
+                ),
+                severity: "medium".to_string(),
+                description: format!(
+                    "Domain '{}' has cleartextTrafficPermitted=\"true\" in the Network Security Config.",
+                    dc.domain
+                ),
+                file_path: Some("res/xml/network_security_config.xml".to_string()),
+                line_number: None,
+                cwe: Some("CWE-319".to_string()),
+                owasp: Some("m3".to_string()),
+                masvs: Some("network-1".to_string()),
+                evidence: Some(dc.domain.clone()),
+            });
+        }
+    }
+
+    findings
+}

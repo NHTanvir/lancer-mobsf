@@ -5,6 +5,7 @@ pub mod macho;
 pub mod ats;
 
 use crate::scanner::ScanFinding;
+use crate::scanner::threat_intel::ThreatIntelResult;
 use crate::db::{DbPool, ScanStatus};
 use std::path::Path;
 use anyhow::Result;
@@ -23,6 +24,7 @@ pub struct IosScanResult {
     pub finding_counts: crate::scanner::android::FindingCounts,
     pub masvs_report: Option<crate::masvs::MasvsReport>,
     pub risk_score: u8,
+    pub threat_intel: Option<ThreatIntelResult>,
 }
 
 fn severity_order(s: &str) -> u8 {
@@ -314,7 +316,20 @@ pub async fn scan_ipa(
         }
     }
 
-    // Step 8: Sort findings by severity
+    // Step 8: Threat intelligence
+    broadcast(progress_tx, scan_id, "Querying threat intelligence...", 85);
+    let threat_intel_result = match crate::scanner::threat_intel::analyze_threat_intel(&sha256).await {
+        Ok((ti_result, ti_findings)) => {
+            all_findings.extend(ti_findings);
+            Some(ti_result)
+        }
+        Err(e) => {
+            tracing::warn!("Threat intel query failed: {}", e);
+            None
+        }
+    };
+
+    // Step 9: Sort findings by severity
     broadcast(progress_tx, scan_id, "Generating report...", 90);
     all_findings.sort_by_key(|f| severity_order(f.severity.as_str()));
 
@@ -337,6 +352,7 @@ pub async fn scan_ipa(
         finding_counts,
         masvs_report,
         risk_score,
+        threat_intel: threat_intel_result,
     };
 
     // Step 9: Persist result.json
