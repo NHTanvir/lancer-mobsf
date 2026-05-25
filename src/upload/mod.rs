@@ -83,7 +83,11 @@ pub async fn upload_handler(
                 .into_response();
         }
 
-        let file_path = format!("{}/{}", upload_dir, original_filename);
+        let safe_name = std::path::Path::new(&original_filename)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("upload");
+        let file_path = format!("{}/{}", upload_dir, safe_name);
         if let Err(e) = tokio::fs::write(&file_path, &data).await {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,

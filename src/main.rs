@@ -74,6 +74,7 @@ async fn run_server(port: u16, db_path: &str) -> anyhow::Result<()> {
         broadcast_tx,
     });
 
+    use axum::extract::DefaultBodyLimit;
     use axum::routing::{get, post};
     let router = axum::Router::new()
         // Upload
@@ -84,6 +85,7 @@ async fn run_server(port: u16, db_path: &str) -> anyhow::Result<()> {
         .route("/api/scan/:id/findings", get(api::get_findings_handler))
         // WebSocket
         .route("/ws/scan/:scan_id", get(ws::ws_handler))
+        .layer(DefaultBodyLimit::max(500 * 1024 * 1024))
         .with_state(state);
 
     let addr = format!("0.0.0.0:{}", port);

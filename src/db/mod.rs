@@ -45,6 +45,7 @@ impl TryFrom<String> for ScanStatus {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
@@ -117,6 +118,10 @@ pub async fn init_db(db_path: &str) -> Result<DbPool> {
 
     sqlx::migrate!("./migrations").run(&pool).await?;
 
+    sqlx::query("PRAGMA foreign_keys = ON")
+        .execute(&pool)
+        .await?;
+
     Ok(pool)
 }
 
@@ -140,12 +145,15 @@ pub async fn insert_scan(pool: &DbPool, scan: &Scan) -> Result<()> {
 pub async fn update_scan_status(pool: &DbPool, scan_id: &str, status: &ScanStatus) -> Result<()> {
     let status_str = status.as_str();
     let now = chrono::Utc::now().to_rfc3339();
-    sqlx::query("UPDATE scans SET status = ?1, updated_at = ?2 WHERE id = ?3")
+    let result = sqlx::query("UPDATE scans SET status = ?1, updated_at = ?2 WHERE id = ?3")
         .bind(status_str)
         .bind(now)
         .bind(scan_id)
         .execute(pool)
         .await?;
+    if result.rows_affected() == 0 {
+        return Err(anyhow::anyhow!("scan not found: {}", scan_id));
+    }
     Ok(())
 }
 
