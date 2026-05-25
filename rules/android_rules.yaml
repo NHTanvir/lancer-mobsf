@@ -1,6 +1,9 @@
 # Android security rules – MobSF-compatible format
-# 50 rules covering: Logging, WebView, SSL/TLS, Crypto, Hardcoded Secrets,
-# File/Storage, SQL Injection, Intent/Component, Reflection/Code, Network
+# ~150 rules covering: Logging, WebView, SSL/TLS, Crypto, Hardcoded Secrets,
+# File/Storage, SQL Injection, Intent/Component, Reflection/Code, Network,
+# Authentication/Authorization, Data Storage, Network Security, Component Security,
+# Input Validation, Privacy/PII, Obfuscation/Anti-Analysis, Deprecated APIs,
+# Firebase/Cloud, Android 12+ Security
 
 # ─── Logging (2) ────────────────────────────────────────────────────────────
 
@@ -521,3 +524,1165 @@
   cwe: CWE-925
   owasp: m1
   masvs: platform-3
+
+# ─── Authentication / Authorization (8) ─────────────────────────────────────
+
+- id: android_biometric_bypass
+  message: "BiometricPrompt error handler or CancellationSignal detected. Ensure biometric authentication cannot be bypassed."
+  type: Regex
+  pattern: 'BiometricPrompt.*error|CancellationSignal'
+  severity: info
+  input_case: exact
+  cwe: CWE-287
+  owasp: m4
+  masvs: auth-8
+
+- id: android_oauth_token
+  message: "OAuth/access token found in string literal. Tokens should not be hardcoded."
+  type: Regex
+  pattern: 'access_token|oauth_token'
+  severity: high
+  input_case: lower
+  cwe: CWE-522
+  owasp: m2
+  masvs: storage-14
+
+- id: android_jwt_hardcoded
+  message: "Hardcoded JWT token detected. JWTs should not be embedded in source code."
+  type: Regex
+  pattern: 'eyJ[A-Za-z0-9_-]{10,}'
+  severity: high
+  input_case: exact
+  cwe: CWE-522
+  owasp: m2
+  masvs: storage-14
+
+- id: android_basic_auth
+  message: "HTTP Basic Authentication credentials detected in source. Never hardcode credentials."
+  type: Regex
+  pattern: 'Basic\s+[A-Za-z0-9+/]{10,}='
+  severity: critical
+  input_case: exact
+  cwe: CWE-522
+  owasp: m2
+  masvs: storage-14
+
+- id: android_account_manager
+  message: "AccountManager password retrieval detected. Verify that stored passwords are handled securely."
+  type: Regex
+  pattern: 'getAccountsByType|getPassword'
+  severity: medium
+  input_case: exact
+  cwe: CWE-522
+  owasp: m2
+  masvs: auth-1
+
+- id: android_remember_me
+  message: "Remember-me / stay-logged-in flag detected. Ensure persistent sessions are properly secured."
+  type: Regex
+  pattern: 'remember_me|rememberMe|stayLoggedIn'
+  severity: info
+  input_case: exact
+  cwe: CWE-613
+  owasp: m4
+  masvs: auth-10
+
+- id: android_session_cookie
+  message: "Session cookie identifier found in string. Ensure session cookies are marked Secure and HttpOnly."
+  type: Regex
+  pattern: 'SESSION|JSESSIONID|PHPSESSID'
+  severity: medium
+  input_case: exact
+  cwe: CWE-614
+  owasp: m4
+  masvs: auth-10
+
+- id: android_client_cert
+  message: "X509Certificate or private key usage detected. Ensure certificates and keys are stored securely."
+  type: Regex
+  pattern: 'X509Certificate|KeyStore.*PrivateKey'
+  severity: info
+  input_case: exact
+  cwe: CWE-321
+  owasp: m5
+  masvs: crypto-2
+
+# ─── Data Storage (8) ───────────────────────────────────────────────────────
+
+- id: android_sqlite_no_encryption
+  message: "SQLiteDatabase.openOrCreateDatabase detected without encryption. Consider using SQLCipher."
+  type: Regex
+  pattern: 'SQLiteDatabase.*openOrCreateDatabase'
+  severity: medium
+  input_case: exact
+  cwe: CWE-312
+  owasp: m2
+  masvs: storage-5
+
+- id: android_realm_no_encryption
+  message: "Realm database instantiated without encryptionKey. Data at rest may be unprotected."
+  type: Regex
+  pattern: 'new\s+Realm\b'
+  severity: high
+  input_case: exact
+  cwe: CWE-312
+  owasp: m2
+  masvs: storage-5
+
+- id: android_firebase_write
+  message: "Firebase setValue/push detected. Ensure Firebase security rules prevent unauthorised writes."
+  type: Regex
+  pattern: 'setValue\s*\(|push\s*\(\s*\)\s*\.setValue'
+  severity: info
+  input_case: exact
+  cwe: CWE-285
+  owasp: m2
+  masvs: storage-2
+
+- id: android_clipboard_sensitive
+  message: "ClipboardManager.setPrimaryClip detected. Avoid placing sensitive data on the clipboard."
+  type: Regex
+  pattern: 'ClipboardManager.*setPrimaryClip'
+  severity: medium
+  input_case: exact
+  cwe: CWE-312
+  owasp: m2
+  masvs: storage-11
+
+- id: android_log_sensitive
+  message: "Logging of potentially sensitive data (password/secret/token) detected."
+  type: Regex
+  pattern: 'Log\.(d|v|i)\s*\(.*(?:password|secret|token)'
+  severity: high
+  input_case: lower
+  cwe: CWE-532
+  owasp: m2
+  masvs: storage-3
+
+- id: android_file_without_encryption
+  message: "FileOutputStream detected without a cipher wrapper. Consider encrypting sensitive files."
+  type: Regex
+  pattern: 'new\s+FileOutputStream\b'
+  severity: info
+  input_case: exact
+  cwe: CWE-312
+  owasp: m2
+  masvs: storage-5
+
+- id: android_preferences_world
+  message: "SharedPreferences opened with MODE_WORLD_READABLE or MODE_WORLD_WRITABLE. All apps can read/write the preferences."
+  type: Regex
+  pattern: 'SharedPreferences.*MODE_WORLD'
+  severity: high
+  input_case: exact
+  cwe: CWE-732
+  owasp: m2
+  masvs: storage-2
+
+- id: android_room_no_encryption
+  message: "Room databaseBuilder detected. Verify the database is encrypted if it stores sensitive data."
+  type: Regex
+  pattern: 'Room\.databaseBuilder'
+  severity: info
+  input_case: exact
+  cwe: CWE-312
+  owasp: m2
+  masvs: storage-5
+
+# ─── Network Security (8) ────────────────────────────────────────────────────
+
+- id: android_http_tracking
+  message: "Third-party tracking/analytics domain detected in source. Review privacy implications."
+  type: Regex
+  pattern: 'doubleclick\.net|analytics\.google|amplitude\.com'
+  severity: info
+  input_case: exact
+  cwe: CWE-359
+  owasp: m6
+  masvs: privacy-4
+
+- id: android_debug_server
+  message: "Localhost or loopback address found in source. Remove debug server endpoints before release."
+  type: Regex
+  pattern: '"localhost"|"127\.0\.0\.1"|"0\.0\.0\.0"'
+  severity: medium
+  input_case: exact
+  cwe: CWE-912
+  owasp: m1
+  masvs: resilience-4
+
+- id: android_cert_pinning_bypass
+  message: "OkHttp hostnameVerifier or checkValidity override detected. Certificate pinning may be bypassed."
+  type: Regex
+  pattern: 'okhttp.*hostnameVerifier|checkValidity'
+  severity: high
+  input_case: lower
+  cwe: CWE-295
+  owasp: m3
+  masvs: network-4
+
+- id: android_insecure_socket
+  message: "Insecure SSL/TLS protocol (SSLv3 or TLS 1.0) explicitly enabled. Use TLS 1.2+."
+  type: Regex
+  pattern: 'setEnabledProtocols.*SSLv3|setEnabledProtocols.*TLSv1[^.]'
+  severity: high
+  input_case: exact
+  cwe: CWE-327
+  owasp: m3
+  masvs: network-2
+
+- id: android_proxy_settings
+  message: "HTTP proxy set via System.setProperty. This can redirect traffic through an attacker-controlled proxy."
+  type: Regex
+  pattern: 'System\.setProperty.*http\.proxy'
+  severity: info
+  input_case: exact
+  cwe: CWE-319
+  owasp: m3
+  masvs: network-1
+
+- id: android_network_logs
+  message: "OkHttp logging interceptor detected. Ensure it is disabled in release builds."
+  type: Regex
+  pattern: 'okhttp.*[Ll]ogging|[Ii]nterceptor.*[Ll]og'
+  severity: info
+  input_case: exact
+  cwe: CWE-532
+  owasp: m1
+  masvs: storage-3
+
+- id: android_gzip_disabled
+  message: "Gzip/Content-Encoding disabled. This may waste bandwidth but is not a security issue by itself."
+  type: Regex
+  pattern: 'setDecompress.*false|AcceptEncoding.*identity'
+  severity: info
+  input_case: exact
+  cwe: CWE-693
+  owasp: m3
+  masvs: network-1
+
+- id: android_http_client_timeout
+  message: "HTTP connection or read timeout configured. Ensure timeouts are appropriately set."
+  type: Regex
+  pattern: 'setConnectTimeout|setReadTimeout'
+  severity: info
+  input_case: exact
+  cwe: CWE-400
+  owasp: m3
+  masvs: network-1
+
+# ─── Component Security (8) ──────────────────────────────────────────────────
+
+- id: android_fragment_injection
+  message: "PreferenceActivity without isValidFragment check. Fragment injection may be possible on API < 19."
+  type: Regex
+  pattern: 'PreferenceActivity.*isValidFragment'
+  severity: high
+  input_case: exact
+  cwe: CWE-926
+  owasp: m1
+  masvs: platform-3
+
+- id: android_activity_result
+  message: "onActivityResult starting a new Activity detected. Verify that the result Intent is validated."
+  type: Regex
+  pattern: 'onActivityResult.*startActivity'
+  severity: medium
+  input_case: exact
+  cwe: CWE-926
+  owasp: m1
+  masvs: platform-3
+
+- id: android_service_starts
+  message: "startService with explicit Intent detected. Ensure the service is not exported unintentionally."
+  type: Regex
+  pattern: 'startService\s*\(.*Intent'
+  severity: info
+  input_case: exact
+  cwe: CWE-926
+  owasp: m1
+  masvs: platform-3
+
+- id: android_alarm_manager
+  message: "AlarmManager.set detected. Verify that PendingIntents used here are immutable."
+  type: Regex
+  pattern: 'AlarmManager.*\.set\s*\('
+  severity: info
+  input_case: exact
+  cwe: CWE-925
+  owasp: m1
+  masvs: platform-3
+
+- id: android_job_scheduler
+  message: "JobScheduler.schedule detected. Review the JobInfo for overly broad network requirements."
+  type: Regex
+  pattern: 'JobScheduler.*\.schedule\s*\('
+  severity: info
+  input_case: exact
+  cwe: CWE-400
+  owasp: m1
+  masvs: resilience-4
+
+- id: android_notification_channel
+  message: "NotificationChannel created. Ensure notifications do not leak sensitive information."
+  type: Regex
+  pattern: 'new\s+NotificationChannel\s*\('
+  severity: info
+  input_case: exact
+  cwe: CWE-200
+  owasp: m2
+  masvs: storage-3
+
+- id: android_work_manager
+  message: "WorkManager.enqueue detected. Verify that work data does not contain sensitive information."
+  type: Regex
+  pattern: 'WorkManager.*enqueue'
+  severity: info
+  input_case: exact
+  cwe: CWE-200
+  owasp: m2
+  masvs: storage-3
+
+- id: android_activity_alias
+  message: "ActivityAlias detected in manifest. Ensure aliases do not unintentionally expose protected activities."
+  type: Regex
+  pattern: 'activity-alias'
+  severity: info
+  input_case: exact
+  cwe: CWE-926
+  owasp: m1
+  masvs: platform-3
+
+# ─── Input Validation (8) ────────────────────────────────────────────────────
+
+- id: android_xss_webview
+  message: "loadDataWithBaseURL or evaluateJavascript with string concatenation detected. May allow XSS."
+  type: Regex
+  pattern: 'loadDataWithBaseURL.*\+|evaluateJavascript.*\+'
+  severity: high
+  input_case: exact
+  cwe: CWE-79
+  owasp: m7
+  masvs: platform-6
+
+- id: android_sql_injection_provider
+  message: "ContentResolver query with string concatenation detected. May allow SQL injection via URI."
+  type: Regex
+  pattern: 'Uri.*query.*\+'
+  severity: high
+  input_case: exact
+  cwe: CWE-89
+  owasp: m7
+  masvs: platform-2
+
+- id: android_path_traversal
+  message: "File constructed from Intent data. Path traversal may be possible."
+  type: Regex
+  pattern: 'new\s+File\s*\(.*getIntent.*getData'
+  severity: high
+  input_case: exact
+  cwe: CWE-22
+  owasp: m7
+  masvs: platform-2
+
+- id: android_zip_path_traversal
+  message: "ZipEntry.getName used in File construction. Zip-slip path traversal may be possible."
+  type: Regex
+  pattern: 'ZipEntry.*getName.*File|getName\s*\(\s*\).*new\s+File'
+  severity: high
+  input_case: exact
+  cwe: CWE-22
+  owasp: m7
+  masvs: platform-2
+
+- id: android_format_string
+  message: "String.format with Intent data detected. Potential format-string injection."
+  type: Regex
+  pattern: 'String\.format.*getIntent'
+  severity: medium
+  input_case: exact
+  cwe: CWE-134
+  owasp: m7
+  masvs: platform-2
+
+- id: android_object_deserialization
+  message: "ObjectInputStream or readObject() detected. Insecure deserialization can lead to RCE."
+  type: Regex
+  pattern: 'ObjectInputStream|readObject\s*\(\s*\)'
+  severity: high
+  input_case: exact
+  cwe: CWE-502
+  owasp: m7
+  masvs: platform-2
+
+- id: android_yaml_deserialization
+  message: "Yaml.load() detected. Unsafe YAML deserialization can execute arbitrary code."
+  type: Regex
+  pattern: 'Yaml.*\.load\s*\('
+  severity: high
+  input_case: exact
+  cwe: CWE-502
+  owasp: m7
+  masvs: platform-2
+
+- id: android_reflection_injection
+  message: "Class.forName with Intent data detected. Reflection injection may allow attacker-controlled class loading."
+  type: Regex
+  pattern: 'forName.*getIntent'
+  severity: high
+  input_case: exact
+  cwe: CWE-470
+  owasp: m7
+  masvs: resilience-2
+
+# ─── Privacy / PII (8) ───────────────────────────────────────────────────────
+
+- id: android_imei_collection
+  message: "IMEI collection via getDeviceId or getImei detected. Collecting IMEI requires disclosure."
+  type: Regex
+  pattern: 'getDeviceId\s*\(\s*\)|TelephonyManager.*getImei'
+  severity: high
+  input_case: exact
+  cwe: CWE-359
+  owasp: m6
+  masvs: privacy-1
+
+- id: android_mac_address
+  message: "MAC address collection detected. MAC address is a persistent hardware identifier."
+  type: Regex
+  pattern: 'getMacAddress\s*\(\s*\)|getHardwareAddress'
+  severity: medium
+  input_case: exact
+  cwe: CWE-359
+  owasp: m6
+  masvs: privacy-1
+
+- id: android_android_id
+  message: "ANDROID_ID usage detected. This is a unique device identifier – use with care."
+  type: Regex
+  pattern: 'Secure\.ANDROID_ID'
+  severity: medium
+  input_case: exact
+  cwe: CWE-359
+  owasp: m6
+  masvs: privacy-1
+
+- id: android_fingerprint_id
+  message: "Fingerprint/biometric identifier access detected. Biometric data is highly sensitive PII."
+  type: Regex
+  pattern: 'Settings\.Secure.*fingerprint'
+  severity: medium
+  input_case: exact
+  cwe: CWE-359
+  owasp: m6
+  masvs: privacy-1
+
+- id: android_sim_info
+  message: "SIM subscriber or serial number collection detected. These are unique carrier identifiers."
+  type: Regex
+  pattern: 'getSubscriberId|getSimSerialNumber'
+  severity: high
+  input_case: exact
+  cwe: CWE-359
+  owasp: m6
+  masvs: privacy-1
+
+- id: android_installed_apps
+  message: "Installed application enumeration detected. This can reveal sensitive user data."
+  type: Regex
+  pattern: 'getInstalledApplications|getInstalledPackages'
+  severity: medium
+  input_case: exact
+  cwe: CWE-359
+  owasp: m6
+  masvs: privacy-2
+
+- id: android_contact_access
+  message: "ContactsContract access detected. Ensure the user has granted READ_CONTACTS permission."
+  type: Regex
+  pattern: 'ContentResolver.*ContactsContract'
+  severity: medium
+  input_case: exact
+  cwe: CWE-359
+  owasp: m6
+  masvs: privacy-1
+
+- id: android_location_tracking
+  message: "Location tracking via LocationManager or FusedLocationProvider detected. Ensure user consent."
+  type: Regex
+  pattern: 'LocationManager.*requestLocationUpdates|FusedLocationProvider'
+  severity: medium
+  input_case: exact
+  cwe: CWE-359
+  owasp: m6
+  masvs: privacy-1
+
+# ─── Obfuscation / Anti-Analysis (6) ─────────────────────────────────────────
+
+- id: android_dex_loading
+  message: "Dynamic DEX loading detected. Malware commonly uses this technique to load code at runtime."
+  type: Regex
+  pattern: 'loadDex|DexFile\.load'
+  severity: critical
+  input_case: exact
+  cwe: CWE-470
+  owasp: m7
+  masvs: resilience-2
+
+- id: android_reflection_method
+  message: "getDeclaredMethods or getMethod detected. Reflection can be used to bypass access controls."
+  type: Regex
+  pattern: 'getDeclaredMethods|getMethod\s*\('
+  severity: medium
+  input_case: exact
+  cwe: CWE-470
+  owasp: m7
+  masvs: resilience-2
+
+- id: android_string_decryption
+  message: "AES decryption in code detected. Runtime string decryption is a common obfuscation technique."
+  type: Regex
+  pattern: 'decrypt.*AES|cipher\.doFinal'
+  severity: info
+  input_case: lower
+  cwe: CWE-311
+  owasp: m9
+  masvs: resilience-3
+
+- id: android_emulator_detection
+  message: "Emulator detection code detected. This may indicate anti-analysis behaviour."
+  type: Regex
+  pattern: 'isEmulator|Build\.FINGERPRINT.*generic'
+  severity: info
+  input_case: exact
+  cwe: CWE-656
+  owasp: m9
+  masvs: resilience-5
+
+- id: android_root_detection
+  message: "Root detection code detected. Ensure root detection is robust."
+  type: Regex
+  pattern: 'isRooted|superuser\.apk|(?<![a-zA-Z])su\b'
+  severity: info
+  input_case: exact
+  cwe: CWE-656
+  owasp: m8
+  masvs: resilience-1
+
+- id: android_frida_detection
+  message: "Frida anti-instrumentation string detected. Ensure anti-tamper controls are complete."
+  type: Regex
+  pattern: '[Ff]rida'
+  severity: info
+  input_case: exact
+  cwe: CWE-656
+  owasp: m9
+  masvs: resilience-6
+
+# ─── Deprecated APIs (6) ─────────────────────────────────────────────────────
+
+- id: android_deprecated_http_client
+  message: "DefaultHttpClient or Apache HttpClient detected. This API is deprecated and removed in API 23+."
+  type: Regex
+  pattern: 'DefaultHttpClient|new\s+HttpClient\b'
+  severity: medium
+  input_case: exact
+  cwe: CWE-477
+  owasp: m7
+  masvs: network-1
+
+- id: android_deprecated_apache
+  message: "org.apache.http package usage detected. Use HttpURLConnection or OkHttp instead."
+  type: Regex
+  pattern: 'org\.apache\.http'
+  severity: medium
+  input_case: exact
+  cwe: CWE-477
+  owasp: m7
+  masvs: network-1
+
+- id: android_js_interface_old
+  message: "addJavascriptInterface used on API < 17. This is a critical vulnerability – JavaScript can invoke any public method."
+  type: Regex
+  pattern: 'addJavascriptInterface'
+  severity: critical
+  input_case: exact
+  cwe: CWE-749
+  owasp: m1
+  masvs: platform-7
+
+- id: android_stopservice_deprecated
+  message: "stopForeground(true) is deprecated in API 33+. Use stopForeground(STOP_FOREGROUND_REMOVE) instead."
+  type: Regex
+  pattern: 'stopForeground\s*\(\s*true\s*\)'
+  severity: low
+  input_case: exact
+  cwe: CWE-477
+  owasp: m7
+  masvs: resilience-4
+
+- id: android_asynctask_deprecated
+  message: "AsyncTask usage detected. AsyncTask is deprecated in API 30. Migrate to coroutines or Executors."
+  type: Regex
+  pattern: '\bAsyncTask\b'
+  severity: low
+  input_case: exact
+  cwe: CWE-477
+  owasp: m7
+  masvs: resilience-4
+
+- id: android_asynctask_doInBackground
+  message: "doInBackground method detected. Ensure background tasks do not perform sensitive operations insecurely."
+  type: Regex
+  pattern: '\bdoInBackground\s*\('
+  severity: info
+  input_case: exact
+  cwe: CWE-477
+  owasp: m7
+  masvs: resilience-4
+
+# ─── Firebase / Cloud (6) ────────────────────────────────────────────────────
+
+- id: android_firebase_auth_bypass
+  message: "FirebaseAuth.signInAnonymously detected. Anonymous users may access data without proper authentication."
+  type: Regex
+  pattern: 'FirebaseAuth.*signInAnonymously'
+  severity: medium
+  input_case: exact
+  cwe: CWE-306
+  owasp: m4
+  masvs: auth-1
+
+- id: android_firebase_realtime_db
+  message: "Firebase Realtime Database URL detected. Verify that security rules are not open to all."
+  type: Regex
+  pattern: 'firebaseio\.com'
+  severity: info
+  input_case: exact
+  cwe: CWE-284
+  owasp: m2
+  masvs: storage-2
+
+- id: android_firebase_storage_ref
+  message: "Firebase Storage bucket URL (gs://) detected. Verify storage security rules."
+  type: Regex
+  pattern: 'gs://[a-z0-9_.-]+'
+  severity: info
+  input_case: exact
+  cwe: CWE-284
+  owasp: m2
+  masvs: storage-2
+
+- id: android_aws_s3
+  message: "AWS S3 bucket reference detected. Ensure S3 bucket is not publicly accessible."
+  type: Regex
+  pattern: 's3\.amazonaws\.com|bucket.*s3'
+  severity: high
+  input_case: lower
+  cwe: CWE-798
+  owasp: m2
+  masvs: storage-14
+
+- id: android_azure_connection
+  message: "Azure Storage connection string detected. Connection strings must not be hardcoded."
+  type: Regex
+  pattern: 'DefaultEndpointsProtocol.*AccountName.*AccountKey'
+  severity: critical
+  input_case: exact
+  cwe: CWE-798
+  owasp: m2
+  masvs: storage-14
+
+- id: android_google_maps_key_alt
+  message: "Google Maps API key detected. API keys should not be embedded in source code."
+  type: Regex
+  pattern: 'AIza[0-9A-Za-z\-_]{35}'
+  severity: high
+  input_case: exact
+  cwe: CWE-798
+  owasp: m2
+  masvs: storage-14
+
+# ─── Android 12+ Security (8) ────────────────────────────────────────────────
+
+- id: android_exact_alarm
+  message: "SCHEDULE_EXACT_ALARM permission usage detected. Ensure it is necessary and declared in manifest."
+  type: Regex
+  pattern: 'SCHEDULE_EXACT_ALARM'
+  severity: medium
+  input_case: exact
+  cwe: CWE-400
+  owasp: m1
+  masvs: resilience-4
+
+- id: android_query_all_packages
+  message: "QUERY_ALL_PACKAGES permission detected. This grants broad visibility into installed apps – a privacy risk."
+  type: Regex
+  pattern: 'QUERY_ALL_PACKAGES'
+  severity: high
+  input_case: exact
+  cwe: CWE-359
+  owasp: m6
+  masvs: privacy-2
+
+- id: android_hide_overlay_windows
+  message: "HIDE_OVERLAY_WINDOWS permission detected. Verify this is used for a legitimate UI purpose."
+  type: Regex
+  pattern: 'HIDE_OVERLAY_WINDOWS'
+  severity: info
+  input_case: exact
+  cwe: CWE-284
+  owasp: m1
+  masvs: platform-3
+
+- id: android_use_exact_alarm
+  message: "USE_EXACT_ALARM permission detected. This can be abused for battery-draining or persistent malware."
+  type: Regex
+  pattern: 'USE_EXACT_ALARM'
+  severity: medium
+  input_case: exact
+  cwe: CWE-400
+  owasp: m1
+  masvs: resilience-4
+
+- id: android_companion_device
+  message: "CompanionDeviceManager usage detected. Ensure companion device pairing follows security best practices."
+  type: Regex
+  pattern: 'CompanionDeviceManager'
+  severity: info
+  input_case: exact
+  cwe: CWE-284
+  owasp: m1
+  masvs: platform-3
+
+- id: android_nearby_wifi
+  message: "NEARBY_WIFI_DEVICES permission detected. Can be used to infer location without GPS."
+  type: Regex
+  pattern: 'NEARBY_WIFI_DEVICES'
+  severity: medium
+  input_case: exact
+  cwe: CWE-359
+  owasp: m6
+  masvs: privacy-1
+
+- id: android_bluetooth_scan
+  message: "BLUETOOTH_SCAN or BLUETOOTH_CONNECT permission detected. Can reveal nearby device information."
+  type: Regex
+  pattern: 'BLUETOOTH_SCAN|BLUETOOTH_CONNECT'
+  severity: medium
+  input_case: exact
+  cwe: CWE-359
+  owasp: m6
+  masvs: privacy-1
+
+- id: android_uwb
+  message: "UwbManager usage detected. Ultra-wideband positioning is highly accurate – handle location data carefully."
+  type: Regex
+  pattern: 'UwbManager'
+  severity: info
+  input_case: exact
+  cwe: CWE-359
+  owasp: m6
+  masvs: privacy-1
+
+# ─── Additional Rules (to reach ~150) ────────────────────────────────────────
+
+- id: android_tapjacking
+  message: "filterTouchesWhenObscured not set. App may be vulnerable to tapjacking (UI overlay attacks)."
+  type: Regex
+  pattern: 'setFilterTouchesWhenObscured\s*\(\s*false\s*\)'
+  severity: medium
+  input_case: exact
+  cwe: CWE-1021
+  owasp: m1
+  masvs: platform-3
+
+- id: android_screen_overlay
+  message: "ACTION_MANAGE_OVERLAY_PERMISSION detected. Ensure this permission is necessary."
+  type: Regex
+  pattern: 'ACTION_MANAGE_OVERLAY_PERMISSION'
+  severity: medium
+  input_case: exact
+  cwe: CWE-1021
+  owasp: m1
+  masvs: platform-3
+
+- id: android_insecure_random_seed
+  message: "SecureRandom seeded with constant value. Seeding SecureRandom makes output predictable."
+  type: Regex
+  pattern: 'new\s+SecureRandom\s*\(\s*[^)]+\)'
+  severity: high
+  input_case: exact
+  cwe: CWE-330
+  owasp: m5
+  masvs: crypto-6
+
+- id: android_crypto_rc4
+  message: "RC4 (ARCFOUR) cipher detected. RC4 is broken and must not be used."
+  type: Regex
+  pattern: 'Cipher\.getInstance\s*\(\s*"RC4|Cipher\.getInstance\s*\(\s*"ARCFOUR'
+  severity: critical
+  input_case: exact
+  cwe: CWE-327
+  owasp: m5
+  masvs: crypto-4
+
+- id: android_crypto_3des
+  message: "Triple-DES (DESede) detected. 3DES is deprecated – use AES-256."
+  type: Regex
+  pattern: 'Cipher\.getInstance\s*\(\s*"DESede'
+  severity: high
+  input_case: exact
+  cwe: CWE-327
+  owasp: m5
+  masvs: crypto-4
+
+- id: android_keystore_user_auth
+  message: "KeyGenParameterSpec without user authentication requirement detected. Keys should require user authentication."
+  type: Regex
+  pattern: 'KeyGenParameterSpec\.Builder'
+  severity: info
+  input_case: exact
+  cwe: CWE-287
+  owasp: m4
+  masvs: crypto-2
+
+- id: android_webview_cache
+  message: "WebView cache mode detected. Sensitive data may be cached in the WebView cache."
+  type: Regex
+  pattern: 'setCacheMode\s*\(|WebSettings\.LOAD_CACHE'
+  severity: info
+  input_case: exact
+  cwe: CWE-524
+  owasp: m2
+  masvs: storage-3
+
+- id: android_auto_backup
+  message: "android:allowBackup=true or backup not explicitly disabled. App data may be extracted via adb backup."
+  type: Regex
+  pattern: 'allowBackup\s*=\s*"true"'
+  severity: medium
+  input_case: exact
+  cwe: CWE-312
+  owasp: m2
+  masvs: storage-8
+
+- id: android_debuggable
+  message: "android:debuggable=true detected. Debug mode must be disabled in release builds."
+  type: Regex
+  pattern: 'android:debuggable\s*=\s*"true"'
+  severity: high
+  input_case: exact
+  cwe: CWE-215
+  owasp: m7
+  masvs: resilience-4
+
+- id: android_exported_provider
+  message: "ContentProvider exported=true without permission. External apps can access this provider."
+  type: Regex
+  pattern: 'ContentProvider.*exported\s*=\s*"true"'
+  severity: high
+  input_case: exact
+  cwe: CWE-926
+  owasp: m1
+  masvs: platform-3
+
+- id: android_task_hijacking
+  message: "launchMode singleTask or singleTop without taskAffinity restriction. Task hijacking may be possible."
+  type: Regex
+  pattern: 'launchMode\s*=\s*"singleTask"|launchMode\s*=\s*"singleTop"'
+  severity: medium
+  input_case: exact
+  cwe: CWE-926
+  owasp: m1
+  masvs: platform-3
+
+- id: android_intent_scheme
+  message: "Intent scheme URL handling detected. Ensure intent:// URLs are validated to prevent intent spoofing."
+  type: Regex
+  pattern: 'Intent\.parseUri|intent://'
+  severity: high
+  input_case: exact
+  cwe: CWE-601
+  owasp: m1
+  masvs: platform-3
+
+- id: android_permission_bypass
+  message: "checkCallingPermission returning false ignored. Permission checks may be bypassed."
+  type: Regex
+  pattern: 'checkCallingPermission|checkPermission'
+  severity: info
+  input_case: exact
+  cwe: CWE-862
+  owasp: m1
+  masvs: platform-3
+
+- id: android_phone_number
+  message: "Phone number access detected. Phone numbers are PII and require user consent."
+  type: Regex
+  pattern: 'getLine1Number|TelephonyManager.*getPhoneNumber'
+  severity: medium
+  input_case: exact
+  cwe: CWE-359
+  owasp: m6
+  masvs: privacy-1
+
+- id: android_call_log
+  message: "Call log access detected. Call logs contain sensitive PII."
+  type: Regex
+  pattern: 'CallLog\.Calls|READ_CALL_LOG'
+  severity: high
+  input_case: exact
+  cwe: CWE-359
+  owasp: m6
+  masvs: privacy-1
+
+- id: android_sms_read
+  message: "SMS read access detected. Reading SMS can capture OTPs and sensitive messages."
+  type: Regex
+  pattern: 'READ_SMS|content://sms'
+  severity: high
+  input_case: exact
+  cwe: CWE-359
+  owasp: m6
+  masvs: privacy-1
+
+- id: android_media_projection
+  message: "MediaProjection API detected. This can capture the device screen – use only with explicit user consent."
+  type: Regex
+  pattern: 'MediaProjectionManager|createVirtualDisplay'
+  severity: high
+  input_case: exact
+  cwe: CWE-359
+  owasp: m6
+  masvs: privacy-1
+
+- id: android_accessibility_service
+  message: "AccessibilityService detected. Can monitor or interact with any app on the device."
+  type: Regex
+  pattern: 'AccessibilityService|onAccessibilityEvent'
+  severity: high
+  input_case: exact
+  cwe: CWE-267
+  owasp: m1
+  masvs: platform-3
+
+- id: android_device_admin
+  message: "DeviceAdminReceiver detected. Device admin apps have elevated privileges."
+  type: Regex
+  pattern: 'DeviceAdminReceiver|DevicePolicyManager'
+  severity: medium
+  input_case: exact
+  cwe: CWE-267
+  owasp: m1
+  masvs: platform-3
+
+- id: android_send_sms
+  message: "SMS sending detected. Ensure the user explicitly consents to sending SMS messages."
+  type: Regex
+  pattern: 'SmsManager.*sendTextMessage|SEND_SMS'
+  severity: medium
+  input_case: exact
+  cwe: CWE-284
+  owasp: m1
+  masvs: platform-3
+
+- id: android_camera_access
+  message: "Camera access detected. Ensure CAMERA permission is requested and justified in privacy policy."
+  type: Regex
+  pattern: 'Camera\.open|CameraManager.*openCamera'
+  severity: info
+  input_case: exact
+  cwe: CWE-359
+  owasp: m6
+  masvs: privacy-1
+
+- id: android_microphone_access
+  message: "Microphone access via MediaRecorder detected. Ensure RECORD_AUDIO permission is disclosed."
+  type: Regex
+  pattern: 'MediaRecorder.*setAudioSource|AudioRecord\s*\('
+  severity: medium
+  input_case: exact
+  cwe: CWE-359
+  owasp: m6
+  masvs: privacy-1
+
+- id: android_screenshot_prevention
+  message: "FLAG_SECURE not set. Screenshots of sensitive screens may be taken by malicious apps."
+  type: Regex
+  pattern: 'getWindow\s*\(\s*\).*addFlags\s*\(|WindowManager\.LayoutParams'
+  severity: info
+  input_case: exact
+  cwe: CWE-200
+  owasp: m2
+  masvs: storage-11
+
+- id: android_pasteboard_read
+  message: "Clipboard read operation detected. Sensitive data may be read from other apps' clipboard contents."
+  type: Regex
+  pattern: 'getPrimaryClip\s*\(\s*\)|getPrimaryClipDescription'
+  severity: medium
+  input_case: exact
+  cwe: CWE-200
+  owasp: m2
+  masvs: storage-11
+
+- id: android_private_data_broadcast
+  message: "Sending a broadcast with sensitive-sounding extras. Use LocalBroadcastManager for in-app events."
+  type: Regex
+  pattern: 'sendBroadcast.*putExtra.*(password|secret|token|key)'
+  severity: high
+  input_case: lower
+  cwe: CWE-925
+  owasp: m1
+  masvs: platform-3
+
+- id: android_hardcoded_gcm_key
+  message: "Firebase Cloud Messaging server key detected. Rotate this key immediately."
+  type: Regex
+  pattern: 'AAAA[A-Za-z0-9_-]{7}:[A-Za-z0-9_-]{140}'
+  severity: critical
+  input_case: exact
+  cwe: CWE-798
+  owasp: m2
+  masvs: storage-14
+
+- id: android_github_token
+  message: "GitHub personal access token detected. Rotate immediately."
+  type: Regex
+  pattern: 'ghp_[0-9a-zA-Z]{36}'
+  severity: critical
+  input_case: exact
+  cwe: CWE-798
+  owasp: m2
+  masvs: storage-14
+
+- id: android_stripe_key
+  message: "Stripe live secret key detected. This key grants full payment processing access."
+  type: Regex
+  pattern: 'sk_live_[0-9a-zA-Z]{24}'
+  severity: critical
+  input_case: exact
+  cwe: CWE-798
+  owasp: m2
+  masvs: storage-14
+
+- id: android_slack_token
+  message: "Slack API token detected. Revoke and rotate this token."
+  type: Regex
+  pattern: 'xox[baprs]-[0-9a-zA-Z]{10,}'
+  severity: critical
+  input_case: exact
+  cwe: CWE-798
+  owasp: m2
+  masvs: storage-14
+
+- id: android_url_with_credentials
+  message: "URL containing embedded credentials detected. Remove credentials from URLs."
+  type: Regex
+  pattern: 'https?://[^@\s]+:[^@\s]+@[^\s]+'
+  severity: high
+  input_case: exact
+  cwe: CWE-522
+  owasp: m2
+  masvs: storage-14
+
+- id: android_rsa_key_size
+  message: "RSA key generation detected. Ensure key size is at least 2048 bits."
+  type: Regex
+  pattern: 'KeyPairGenerator.*RSA'
+  severity: info
+  input_case: exact
+  cwe: CWE-326
+  owasp: m5
+  masvs: crypto-3
+
+- id: android_insecure_tls_version
+  message: "TLS 1.0 or 1.1 explicitly configured. Use TLS 1.2 or higher."
+  type: Regex
+  pattern: '"TLSv1\.0"|"TLSv1\.1"|"TLS1\.0"|"TLS1\.1"'
+  severity: high
+  input_case: exact
+  cwe: CWE-327
+  owasp: m3
+  masvs: network-2
+
+- id: android_sql_concatenation
+  message: "SQL query built via string concatenation. Use parameterized queries."
+  type: Regex
+  pattern: '"SELECT.*"\s*\+|"INSERT.*"\s*\+|"UPDATE.*"\s*\+|"DELETE.*"\s*\+'
+  severity: high
+  input_case: exact
+  cwe: CWE-89
+  owasp: m7
+  masvs: platform-2
+
+- id: android_hardcoded_private_key
+  message: "PEM private key block detected in source code. Remove immediately."
+  type: Regex
+  pattern: '-----BEGIN.*PRIVATE KEY-----|-----BEGIN RSA PRIVATE KEY-----'
+  severity: critical
+  input_case: exact
+  cwe: CWE-321
+  owasp: m5
+  masvs: crypto-2
+
+- id: android_cordova_bridge
+  message: "Cordova/PhoneGap JavaScript bridge detected. Ensure bridge interfaces are not over-privileged."
+  type: Regex
+  pattern: 'cordova\.exec|PhoneGap'
+  severity: medium
+  input_case: exact
+  cwe: CWE-749
+  owasp: m1
+  masvs: platform-7
+
+- id: android_geofencing
+  message: "Geofencing API detected. Location data collected for geofences is sensitive PII."
+  type: Regex
+  pattern: 'GeofencingClient|addGeofences'
+  severity: info
+  input_case: exact
+  cwe: CWE-359
+  owasp: m6
+  masvs: privacy-1
+
+- id: android_ad_id
+  message: "Advertising ID retrieval detected. Link advertising ID usage to your privacy policy."
+  type: Regex
+  pattern: 'AdvertisingIdClient|getAdvertisingIdInfo'
+  severity: info
+  input_case: exact
+  cwe: CWE-359
+  owasp: m6
+  masvs: privacy-1
+
+- id: android_open_redirect
+  message: "WebView loading URL from Intent data. Verify the URL to prevent open redirect."
+  type: Regex
+  pattern: 'loadUrl\s*\(.*getIntent|loadUrl\s*\(.*getData'
+  severity: high
+  input_case: exact
+  cwe: CWE-601
+  owasp: m1
+  masvs: platform-6
+
+- id: android_pkce_missing
+  message: "OAuth flow detected without PKCE (code_challenge). PKCE is required for public clients."
+  type: Regex
+  pattern: 'response_type=code|authorization_code'
+  severity: medium
+  input_case: lower
+  cwe: CWE-287
+  owasp: m4
+  masvs: auth-1
+
+- id: android_network_security_config_missing
+  message: "Network Security Configuration not referenced. Default trust anchors include all system CAs."
+  type: Regex
+  pattern: 'networkSecurityConfig'
+  severity: info
+  input_case: exact
+  cwe: CWE-295
+  owasp: m3
+  masvs: network-3

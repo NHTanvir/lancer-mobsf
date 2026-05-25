@@ -179,13 +179,29 @@ pub async fn scan_apk(
     all_findings.extend(binary_findings);
 
     // Step 7: Extract strings and find string findings
-    broadcast(progress_tx, scan_id, "Extracting strings...", 80);
+    broadcast(progress_tx, scan_id, "Extracting strings...", 75);
     let strings_found =
         strings::extract_strings_from_apk(&extracted.so_files, &extracted.dex_files);
     let string_findings = strings::find_string_findings(&strings_found);
     all_findings.extend(string_findings);
 
-    // Step 8: Generate report (sort findings by severity)
+    // Step 8: Hardcoded secrets scan
+    broadcast(progress_tx, scan_id, "Scanning for hardcoded secrets...", 80);
+    if jadx_success && sources_dir.is_dir() {
+        let secret_findings = secrets::scan_secrets_in_directory(&sources_dir).await;
+        all_findings.extend(secret_findings);
+    }
+
+    // Step 9: Tracker detection
+    broadcast(progress_tx, scan_id, "Detecting tracker libraries...", 85);
+    if jadx_success && sources_dir.is_dir() {
+        let tracker_db = tracker::load_tracker_db();
+        let java_files = tracker::collect_java_files(&sources_dir);
+        let tracker_findings = tracker::detect_trackers(&java_files, &tracker_db);
+        all_findings.extend(tracker_findings);
+    }
+
+    // Step 10: Generate report (sort findings by severity)
     broadcast(progress_tx, scan_id, "Generating report...", 90);
     all_findings.sort_by_key(|f| severity_order(f.severity.as_str()));
 
