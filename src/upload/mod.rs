@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use crate::AppState;
 use crate::db::{insert_scan, Scan, ScanStatus};
+use crate::scanner::android;
 
 pub async fn upload_handler(
     State(state): State<Arc<AppState>>,
@@ -114,6 +115,16 @@ pub async fn upload_handler(
                 Json(json!({"error": format!("failed to insert scan: {}", e)})),
             )
                 .into_response();
+        }
+
+        // Trigger async scan for APK files
+        if file_type == "apk" {
+            android::trigger_scan(
+                scan_id.clone(),
+                state.db.clone(),
+                state.broadcast_tx.clone(),
+            )
+            .await;
         }
 
         return (

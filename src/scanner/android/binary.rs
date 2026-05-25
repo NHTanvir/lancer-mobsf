@@ -4,7 +4,7 @@ use crate::scanner::ScanFinding;
 use std::path::PathBuf;
 use goblin::Object;
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ElfHardening {
     pub path: String,
     pub arch: String,
@@ -17,7 +17,7 @@ pub struct ElfHardening {
     pub stripped: bool,
 }
 
-#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub enum RelroType {
     Full,
     Partial,

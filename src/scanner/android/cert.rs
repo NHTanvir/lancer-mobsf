@@ -5,7 +5,7 @@ use anyhow::Result;
 use sha2::{Digest, Sha256};
 
 /// Certificate information extracted from a META-INF signing file.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CertInfo {
     pub subject: String,
     pub issuer: String,

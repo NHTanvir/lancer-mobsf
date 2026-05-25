@@ -2,7 +2,7 @@
 
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
+    http::{header, StatusCode},
     response::IntoResponse,
     Json,
 };
@@ -73,6 +73,116 @@ pub async fn get_findings_handler(
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({"error": format!("database error: {}", e)})),
+        )
+            .into_response(),
+    }
+}
+
+/// Load the AndroidScanResult from uploads/<scan_id>/result.json
+async fn load_result(scan_id: &str) -> Result<crate::scanner::android::AndroidScanResult, String> {
+    let result_path = format!("uploads/{}/result.json", scan_id);
+    let data = tokio::fs::read_to_string(&result_path)
+        .await
+        .map_err(|e| format!("result.json not found for scan {}: {}", scan_id, e))?;
+    serde_json::from_str(&data)
+        .map_err(|e| format!("Failed to parse result.json: {}", e))
+}
+
+/// GET /api/scan/:id/report - returns HTML report
+pub async fn get_report_html_handler(
+    Path(scan_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    // Verify scan exists in DB first
+    match get_scan(&state.db, &scan_id).await {
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "scan not found", "scan_id": scan_id})),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": format!("database error: {}", e)})),
+            )
+                .into_response()
+        }
+        Ok(Some(_)) => {}
+    }
+
+    let result = match load_result(&scan_id).await {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": e})),
+            )
+                .into_response()
+        }
+    };
+
+    match crate::report::render_html_report(&result) {
+        Ok(html) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+            html,
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("Failed to render HTML report: {}", e)})),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/scan/:id/report.json - returns JSON report
+pub async fn get_report_json_handler(
+    Path(scan_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    // Verify scan exists in DB first
+    match get_scan(&state.db, &scan_id).await {
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "scan not found", "scan_id": scan_id})),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": format!("database error: {}", e)})),
+            )
+                .into_response()
+        }
+        Ok(Some(_)) => {}
+    }
+
+    let result = match load_result(&scan_id).await {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": e})),
+            )
+                .into_response()
+        }
+    };
+
+    match crate::report::render_json_report(&result) {
+        Ok(json_str) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
+            json_str,
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("Failed to render JSON report: {}", e)})),
         )
             .into_response(),
     }

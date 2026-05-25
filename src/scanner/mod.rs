@@ -4,7 +4,7 @@ pub mod ios;
 
 /// Unified finding type produced by all scanner sub-modules.
 /// This is the *scan-time* finding (not the DB model).
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ScanFinding {
     pub rule_id: String,
     pub title: String,
