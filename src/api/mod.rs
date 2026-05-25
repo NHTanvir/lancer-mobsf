@@ -13,6 +13,57 @@ use std::sync::Arc;
 use crate::AppState;
 use crate::db::{delete_scan, get_findings, get_scan, get_scan_by_hash, list_scans};
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Dynamic analysis endpoints
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// GET /api/devices — list connected ADB devices
+pub async fn list_devices_handler() -> impl IntoResponse {
+    match crate::dynamic::adb::AdbClient::list_devices().await {
+        Ok(devices) => (StatusCode::OK, Json(json!({"devices": devices}))).into_response(),
+        Err(e) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error": format!("adb error: {}", e)})),
+        )
+            .into_response(),
+    }
+}
+
+/// POST /api/dynamic/start — start a dynamic analysis session
+pub async fn start_dynamic_handler(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<crate::dynamic::DynamicScanRequest>,
+) -> impl IntoResponse {
+    match crate::dynamic::start_dynamic_session(req, &state.db, &state.broadcast_tx).await {
+        Ok(session) => (StatusCode::OK, Json(json!(session))).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": format!("{}", e)})),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/dynamic/:scan_id/screenshot — serve the latest screenshot PNG
+pub async fn get_screenshot_handler(
+    Path(scan_id): Path<String>,
+) -> impl IntoResponse {
+    let path = format!("uploads/{}/screenshot.png", scan_id);
+    match tokio::fs::read(&path).await {
+        Ok(bytes) => axum::response::Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "image/png")
+            .body(axum::body::Body::from(bytes))
+            .unwrap()
+            .into_response(),
+        Err(_) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "screenshot not found", "scan_id": scan_id})),
+        )
+            .into_response(),
+    }
+}
+
 /// GET /api/scan/:id - return scan status as JSON
 pub async fn get_scan_handler(
     Path(scan_id): Path<String>,

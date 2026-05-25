@@ -158,6 +158,10 @@ async fn run_server(port: u16, db_path: &str) -> anyhow::Result<()> {
         .route("/api/scan/:id/report.pdf", get(api::get_report_pdf_handler))
         // WebSocket
         .route("/ws/scan/:scan_id", get(ws::ws_handler))
+        // Dynamic analysis
+        .route("/api/devices", get(api::list_devices_handler))
+        .route("/api/dynamic/start", post(api::start_dynamic_handler))
+        .route("/api/dynamic/:scan_id/screenshot", get(api::get_screenshot_handler))
         // MobSF-compatible v1 API
         .route("/api/v1/upload", post(api::v1_upload_handler))
         .route("/api/v1/scan", post(api::v1_scan_handler))
