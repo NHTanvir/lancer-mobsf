@@ -1,7 +1,10 @@
 // Google Safe Browsing v4 domain reputation check
 use anyhow::Result;
 use crate::scanner::ScanFinding;
-use regex::Regex;
+
+// Compile the URL regex once at startup (stable since Rust 1.80)
+static URL_RE: std::sync::LazyLock<regex::Regex> =
+    std::sync::LazyLock::new(|| regex::Regex::new(r#"https?://[^\s"'<>]+"#).unwrap());
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public types
@@ -101,16 +104,11 @@ fn normalize_url(url: &str) -> String {
 /// Extract HTTP/HTTPS URLs from a list of raw strings (from strings extraction).
 /// Filters out obviously-internal URLs (localhost, 192.168., 10., 127.).
 pub fn extract_urls_from_strings(strings: &[String]) -> Vec<String> {
-    let url_re = match Regex::new(r#"https?://[^\s"'<>]+"#) {
-        Ok(r) => r,
-        Err(_) => return Vec::new(),
-    };
-
     let mut seen = std::collections::HashSet::new();
     let mut urls: Vec<String> = Vec::new();
 
     for s in strings {
-        for m in url_re.find_iter(s) {
+        for m in URL_RE.find_iter(s) {
             let raw = m.as_str();
             // Filter internal addresses
             if is_internal_url(raw) {
@@ -132,8 +130,7 @@ fn is_internal_url(url: &str) -> bool {
     lower.contains("localhost")
         || lower.contains("127.")
         || lower.contains("192.168.")
-        || lower.contains("10.")
-        // Handle 10.x.x.x properly — only filter if it's in the host part
+        // 10.x.x.x: use precise host-only check to avoid false positives like example10.com
         || is_rfc1918_ten_block(url)
 }
 
@@ -171,15 +168,17 @@ pub async fn check_urls(urls: &[String]) -> Result<Vec<SafeBrowsingMatch>> {
         .timeout(std::time::Duration::from_secs(10))
         .build()?;
 
-    let endpoint = format!(
-        "https://safebrowsing.googleapis.com/v4/threatMatches:find?key={}",
-        api_key
-    );
+    // Build base URL without embedding the key (keeps key out of logs/error messages)
+    let base_url = "https://safebrowsing.googleapis.com/v4/threatMatches:find";
 
     let mut all_matches: Vec<SafeBrowsingMatch> = Vec::new();
 
     // Process in chunks of 500 (API limit)
-    for chunk in urls.chunks(500) {
+    let chunks: Vec<&[String]> = urls.chunks(500).collect();
+    let total_chunks = chunks.len();
+    let mut completed_chunks = 0usize;
+
+    for chunk in &chunks {
         let threat_entries: Vec<SbThreatEntry> = chunk
             .iter()
             .map(|u| SbThreatEntry { url: u.clone() })
@@ -203,10 +202,22 @@ pub async fn check_urls(urls: &[String]) -> Result<Vec<SafeBrowsingMatch>> {
             },
         };
 
-        let response = match client.post(&endpoint).json(&request_body).send().await {
+        // Pass the API key as a query parameter so it never appears in logged URL strings
+        let response = match client
+            .post(base_url)
+            .query(&[("key", &api_key)])
+            .json(&request_body)
+            .send()
+            .await
+        {
             Ok(r) => r,
             Err(e) => {
                 tracing::warn!("Safe Browsing API request failed: {}", e);
+                tracing::warn!(
+                    "Safe Browsing check partially failed: only {} of {} chunks completed",
+                    completed_chunks,
+                    total_chunks
+                );
                 return Ok(all_matches);
             }
         };
@@ -216,6 +227,11 @@ pub async fn check_urls(urls: &[String]) -> Result<Vec<SafeBrowsingMatch>> {
                 "Safe Browsing API returned non-200 status: {}",
                 response.status()
             );
+            tracing::warn!(
+                "Safe Browsing check partially failed: only {} of {} chunks completed",
+                completed_chunks,
+                total_chunks
+            );
             return Ok(all_matches);
         }
 
@@ -223,6 +239,11 @@ pub async fn check_urls(urls: &[String]) -> Result<Vec<SafeBrowsingMatch>> {
             Ok(r) => r,
             Err(e) => {
                 tracing::warn!("Failed to parse Safe Browsing API response: {}", e);
+                tracing::warn!(
+                    "Safe Browsing check partially failed: only {} of {} chunks completed",
+                    completed_chunks,
+                    total_chunks
+                );
                 return Ok(all_matches);
             }
         };
@@ -235,6 +256,8 @@ pub async fn check_urls(urls: &[String]) -> Result<Vec<SafeBrowsingMatch>> {
                 });
             }
         }
+
+        completed_chunks += 1;
     }
 
     Ok(all_matches)
