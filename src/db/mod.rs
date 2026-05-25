@@ -222,6 +222,39 @@ pub async fn insert_finding(pool: &DbPool, finding: &Finding) -> Result<i64> {
     Ok(result.last_insert_rowid())
 }
 
+/// Look up a scan by its SHA-256 hash (no index required for small datasets).
+pub async fn get_scan_by_hash(pool: &DbPool, hash: &str) -> Result<Option<Scan>> {
+    let row = sqlx::query(
+        "SELECT id, filename, file_type, sha256, status, created_at, updated_at \
+         FROM scans WHERE sha256 = ?1 ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(hash)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|r| Scan {
+        id: r.get("id"),
+        filename: r.get("filename"),
+        file_type: r.get("file_type"),
+        sha256: r.get("sha256"),
+        status: r.get("status"),
+        created_at: r.get("created_at"),
+        updated_at: r.get("updated_at"),
+    }))
+}
+
+pub async fn delete_scan(pool: &DbPool, scan_id: &str) -> Result<()> {
+    sqlx::query("DELETE FROM findings WHERE scan_id = ?1")
+        .bind(scan_id)
+        .execute(pool)
+        .await?;
+    sqlx::query("DELETE FROM scans WHERE id = ?1")
+        .bind(scan_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 pub async fn get_findings(pool: &DbPool, scan_id: &str) -> Result<Vec<Finding>> {
     let rows = sqlx::query(
         "SELECT id, scan_id, rule_id, title, severity, description, \

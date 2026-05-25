@@ -22,6 +22,7 @@ pub struct IosScanResult {
     pub findings: Vec<ScanFinding>,
     pub finding_counts: crate::scanner::android::FindingCounts,
     pub masvs_report: Option<crate::masvs::MasvsReport>,
+    pub risk_score: u8,
 }
 
 fn severity_order(s: &str) -> u8 {
@@ -319,8 +320,9 @@ pub async fn scan_ipa(
 
     let finding_counts = crate::scanner::android::FindingCounts::from_findings(&all_findings);
 
-    // Compute MASVS compliance score
+    // Compute MASVS compliance score and overall risk score
     let masvs_report = Some(crate::masvs::compute_masvs_score(&all_findings));
+    let risk_score = crate::masvs::overall_risk_score(&all_findings);
 
     let result = IosScanResult {
         scan_id: scan_id.to_string(),
@@ -334,6 +336,7 @@ pub async fn scan_ipa(
         findings: all_findings,
         finding_counts,
         masvs_report,
+        risk_score,
     };
 
     // Step 9: Persist result.json

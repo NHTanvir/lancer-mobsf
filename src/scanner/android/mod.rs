@@ -33,6 +33,7 @@ pub struct AndroidScanResult {
     pub findings: Vec<ScanFinding>,
     pub finding_counts: FindingCounts,
     pub masvs_report: Option<MasvsReport>,
+    pub risk_score: u8,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -209,8 +210,9 @@ pub async fn scan_apk(
 
     let finding_counts = FindingCounts::from_findings(&all_findings);
 
-    // Compute MASVS compliance score
+    // Compute MASVS compliance score and overall risk score
     let masvs_report = Some(crate::masvs::compute_masvs_score(&all_findings));
+    let risk_score = crate::masvs::overall_risk_score(&all_findings);
 
     let result = AndroidScanResult {
         scan_id: scan_id.to_string(),
@@ -225,6 +227,7 @@ pub async fn scan_apk(
         findings: all_findings,
         finding_counts,
         masvs_report,
+        risk_score,
     };
 
     // Step 9: Persist result.json

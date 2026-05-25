@@ -180,3 +180,13 @@ pub fn compute_masvs_score(findings: &[ScanFinding]) -> MasvsReport {
         overall_status,
     }
 }
+
+/// Compute an overall risk score (0–100) from a findings list.
+/// Formula: 100 - min(100, critical*20 + high*5 + medium*2)
+pub fn overall_risk_score(findings: &[ScanFinding]) -> u8 {
+    let critical = findings.iter().filter(|f| f.severity == "critical").count();
+    let high = findings.iter().filter(|f| f.severity == "high").count();
+    let medium = findings.iter().filter(|f| f.severity == "medium").count();
+    let deductions = critical * 20 + high * 5 + medium * 2;
+    100u8.saturating_sub(deductions.min(100) as u8)
+}
