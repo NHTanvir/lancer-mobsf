@@ -6,5 +6,6 @@ pub mod cert;
 pub mod jadx;
 pub mod rules;
 pub mod binary;
+pub mod strings;
 pub mod secrets;
 pub mod tracker;
