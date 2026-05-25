@@ -1,10 +1,12 @@
 // ios scanner module
-pub mod ipa;
-pub mod plist_analysis;
-pub mod macho;
 pub mod ats;
+pub mod ipa;
+pub mod macho;
+pub mod plist_analysis;
 
 use crate::scanner::ScanFinding;
+use crate::scanner::ai_triage::{self, TriageSummary};
+use crate::scanner::cve::{self, LibraryCveResult};
 use crate::scanner::threat_intel::ThreatIntelResult;
 use crate::db::{DbPool, ScanStatus};
 use std::path::Path;
@@ -25,6 +27,8 @@ pub struct IosScanResult {
     pub masvs_report: Option<crate::masvs::MasvsReport>,
     pub risk_score: u8,
     pub threat_intel: Option<ThreatIntelResult>,
+    pub ai_triage: Option<TriageSummary>,
+    pub cve_results: Vec<LibraryCveResult>,
 }
 
 fn severity_order(s: &str) -> u8 {
@@ -329,7 +333,32 @@ pub async fn scan_ipa(
         }
     };
 
-    // Step 9: Sort findings by severity
+    // Step 9: AI triage (optional, requires ANTHROPIC_API_KEY)
+    broadcast(progress_tx, scan_id, "Running AI triage analysis...", 92);
+    let ai_triage = ai_triage::generate_triage(&all_findings, &bundle_id, "ipa")
+        .await
+        .ok()
+        .flatten();
+
+    // Step 10: CVE correlation (scan Swift/ObjC source files for library imports)
+    // iOS apps may bundle Java-origin libraries via React Native or similar.
+    // We still attempt detection on any Java files present in the work_dir.
+    let java_files: Vec<std::path::PathBuf> = {
+        let mut files = Vec::new();
+        if let Ok(walker) = std::fs::read_dir(work_dir) {
+            collect_source_files_recursive(walker, &mut files);
+        }
+        files
+    };
+    let cve_results = if !java_files.is_empty() {
+        cve::correlate_cves(&java_files).await.unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let cve_findings = cve::cve_to_findings(&cve_results);
+    all_findings.extend(cve_findings);
+
+    // Step 11: Sort findings by severity
     broadcast(progress_tx, scan_id, "Generating report...", 90);
     all_findings.sort_by_key(|f| severity_order(f.severity.as_str()));
 
@@ -353,6 +382,8 @@ pub async fn scan_ipa(
         masvs_report,
         risk_score,
         threat_intel: threat_intel_result,
+        ai_triage,
+        cve_results,
     };
 
     // Step 9: Persist result.json
@@ -415,6 +446,26 @@ pub async fn trigger_scan(
             }
         }
     });
+}
+
+/// Recursively collect .java and .kt files from a ReadDir walker.
+fn collect_source_files_recursive(
+    walker: std::fs::ReadDir,
+    out: &mut Vec<std::path::PathBuf>,
+) {
+    for entry in walker.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if let Ok(sub) = std::fs::read_dir(&path) {
+                collect_source_files_recursive(sub, out);
+            }
+        } else {
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            if ext == "java" || ext == "kt" {
+                out.push(path);
+            }
+        }
+    }
 }
 
 /// Find the first .ipa file in a directory.

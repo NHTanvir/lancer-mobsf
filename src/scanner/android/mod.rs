@@ -1,16 +1,18 @@
 // android scanner module
 pub mod apk;
-pub mod manifest;
-pub mod permissions;
+pub mod binary;
 pub mod cert;
 pub mod jadx;
+pub mod manifest;
+pub mod permissions;
 pub mod rules;
-pub mod binary;
-pub mod strings;
 pub mod secrets;
+pub mod strings;
 pub mod tracker;
 
 use crate::scanner::ScanFinding;
+use crate::scanner::ai_triage::{self, TriageSummary};
+use crate::scanner::cve::{self, LibraryCveResult};
 use crate::scanner::threat_intel::{self, ThreatIntelResult};
 use crate::db::{DbPool, ScanStatus};
 use crate::masvs::MasvsReport;
@@ -36,6 +38,8 @@ pub struct AndroidScanResult {
     pub masvs_report: Option<MasvsReport>,
     pub risk_score: u8,
     pub threat_intel: Option<ThreatIntelResult>,
+    pub ai_triage: Option<TriageSummary>,
+    pub cve_results: Vec<LibraryCveResult>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -243,7 +247,28 @@ pub async fn scan_apk(
         }
     };
 
-    // Step 11: Generate report (sort findings by severity)
+    // Step 11: AI triage (optional, requires ANTHROPIC_API_KEY)
+    broadcast(progress_tx, scan_id, "Running AI triage analysis...", 92);
+    let ai_triage = ai_triage::generate_triage(&all_findings, &package_name, "apk")
+        .await
+        .ok()
+        .flatten();
+
+    // Step 12: CVE correlation (if jadx succeeded)
+    let java_files: Vec<std::path::PathBuf> = if jadx_success && sources_dir.is_dir() {
+        crate::scanner::android::tracker::collect_java_files(&sources_dir)
+    } else {
+        Vec::new()
+    };
+    let cve_results = if !java_files.is_empty() {
+        cve::correlate_cves(&java_files).await.unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let cve_findings = cve::cve_to_findings(&cve_results);
+    all_findings.extend(cve_findings);
+
+    // Step 13: Generate report (sort findings by severity)
     broadcast(progress_tx, scan_id, "Generating report...", 90);
     all_findings.sort_by_key(|f| severity_order(f.severity.as_str()));
 
@@ -268,6 +293,8 @@ pub async fn scan_apk(
         masvs_report,
         risk_score,
         threat_intel: threat_intel_result,
+        ai_triage,
+        cve_results,
     };
 
     // Step 9: Persist result.json

@@ -800,6 +800,116 @@ pub async fn v1_delete_scan_handler(
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// AI triage and CVE endpoints
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// POST /api/scan/:id/triage — trigger AI triage for an existing scan (async)
+pub async fn post_triage_handler(
+    Path(scan_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    // Verify the scan exists
+    match get_scan(&state.db, &scan_id).await {
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "scan not found", "scan_id": scan_id})),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": format!("database error: {}", e)})),
+            )
+                .into_response()
+        }
+        Ok(Some(_)) => {}
+    }
+
+    // Load scan result
+    let result = match load_result(&scan_id).await {
+        Ok(r) => r,
+        Err(e) => {
+            return (StatusCode::NOT_FOUND, Json(json!({"error": e}))).into_response()
+        }
+    };
+
+    // Spawn triage asynchronously
+    let scan_id_clone = scan_id.clone();
+    tokio::spawn(async move {
+        match crate::scanner::ai_triage::generate_triage(
+            &result.findings,
+            &result.package_name,
+            "apk",
+        )
+        .await
+        {
+            Ok(Some(summary)) => {
+                let triage_path = format!("uploads/{}/triage.json", scan_id_clone);
+                let json = serde_json::to_string_pretty(&summary).unwrap_or_default();
+                let _ = tokio::fs::write(&triage_path, &json).await;
+                tracing::info!("AI triage saved for scan {}", scan_id_clone);
+            }
+            Ok(None) => {
+                tracing::debug!("AI triage returned None for scan {}", scan_id_clone);
+            }
+            Err(e) => {
+                tracing::warn!("AI triage error for scan {}: {}", scan_id_clone, e);
+            }
+        }
+    });
+
+    (
+        StatusCode::ACCEPTED,
+        Json(json!({
+            "status": "triage triggered",
+            "scan_id": scan_id,
+            "message": "AI triage is running asynchronously. Requires ANTHROPIC_API_KEY.",
+        })),
+    )
+        .into_response()
+}
+
+/// GET /api/scan/:id/cves — get CVE correlation results
+pub async fn get_cves_handler(
+    Path(scan_id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    // Verify the scan exists
+    match get_scan(&state.db, &scan_id).await {
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": "scan not found", "scan_id": scan_id})),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": format!("database error: {}", e)})),
+            )
+                .into_response()
+        }
+        Ok(Some(_)) => {}
+    }
+
+    // Load scan result and return CVE results from it
+    match load_result(&scan_id).await {
+        Ok(result) => (
+            StatusCode::OK,
+            Json(json!({
+                "scan_id": scan_id,
+                "cve_results": result.cve_results,
+            })),
+        )
+            .into_response(),
+        Err(e) => (StatusCode::NOT_FOUND, Json(json!({"error": e}))).into_response(),
+    }
+}
+
 /// GET /api/v1/download_pdf?hash=<sha256> — download PDF (MobSF compatible)
 pub async fn v1_download_pdf_handler(
     Query(params): Query<HashQuery>,

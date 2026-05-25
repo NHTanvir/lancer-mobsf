@@ -1,5 +1,7 @@
 // scanner module - Android and iOS static analysis
+pub mod ai_triage;
 pub mod android;
+pub mod cve;
 pub mod ios;
 pub mod threat_intel;
 

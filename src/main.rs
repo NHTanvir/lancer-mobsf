@@ -156,6 +156,9 @@ async fn run_server(port: u16, db_path: &str) -> anyhow::Result<()> {
         .route("/api/scan/:id/report", get(api::get_report_html_handler))
         .route("/api/scan/:id/report.json", get(api::get_report_json_handler))
         .route("/api/scan/:id/report.pdf", get(api::get_report_pdf_handler))
+        // AI triage + CVE
+        .route("/api/scan/:id/triage", post(api::post_triage_handler))
+        .route("/api/scan/:id/cves", get(api::get_cves_handler))
         // WebSocket
         .route("/ws/scan/:scan_id", get(ws::ws_handler))
         // Dynamic analysis
