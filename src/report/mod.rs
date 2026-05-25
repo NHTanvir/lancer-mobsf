@@ -1,8 +1,10 @@
 // report module - report generation and templates
 
+use crate::masvs::MasvsReport;
 use crate::scanner::android::AndroidScanResult;
 use anyhow::Result;
 use minijinja::{context, Environment};
+use std::path::Path;
 
 const REPORT_TEMPLATE: &str = r#"
 <!DOCTYPE html>
@@ -18,6 +20,10 @@ const REPORT_TEMPLATE: &str = r#"
     .medium { background: #3d351a; color: #e3b341; padding: 4px 8px; border-radius: 3px; }
     .low { background: #1a2a3d; color: #58a6ff; padding: 4px 8px; border-radius: 3px; }
     .info { background: #1a2a1a; color: #3fb950; padding: 4px 8px; border-radius: 3px; }
+    .pass { background: #1a3d1a; color: #3fb950; padding: 4px 8px; border-radius: 3px; }
+    .fail { background: #3d1a1a; color: #ff7b7b; padding: 4px 8px; border-radius: 3px; }
+    .partial { background: #3d351a; color: #e3b341; padding: 4px 8px; border-radius: 3px; }
+    .nottested { background: #21262d; color: #8b949e; padding: 4px 8px; border-radius: 3px; }
     table { width: 100%; border-collapse: collapse; margin: 20px 0; }
     th { background: #161b22; padding: 10px; text-align: left; border-bottom: 1px solid #30363d; }
     td { padding: 8px 10px; border-bottom: 1px solid #21262d; vertical-align: top; }
@@ -41,6 +47,27 @@ const REPORT_TEMPLATE: &str = r#"
     <div class="summary-box info"><div class="count">{{ counts.info }}</div>Info</div>
   </div>
 
+  {% if masvs_categories %}
+  <h2>MASVS v2 Compliance Score</h2>
+  <table>
+    <tr><th>Category</th><th>Score</th><th>Status</th><th>Failed Checks</th></tr>
+    {% for cat in masvs_categories %}
+    <tr>
+      <td>{{ cat.name }}</td>
+      <td>{{ cat.score_pct }}%</td>
+      <td><span class="{{ cat.status_lower }}">{{ cat.status }}</span></td>
+      <td>{{ cat.failing_checks_str }}</td>
+    </tr>
+    {% endfor %}
+    <tr style="font-weight:bold">
+      <td>Overall</td>
+      <td>{{ overall_score_pct }}%</td>
+      <td>{{ overall_status }}</td>
+      <td></td>
+    </tr>
+  </table>
+  {% endif %}
+
   <h2>Findings ({{ counts.total }} total)</h2>
   <table>
     <tr><th>Severity</th><th>Rule</th><th>Title</th><th>CWE</th><th>MASVS</th><th>File</th><th>Evidence</th></tr>
@@ -60,8 +87,37 @@ const REPORT_TEMPLATE: &str = r#"
 </html>
 "#;
 
-/// Generate HTML report from an AndroidScanResult.
+/// Build a serde_json::Value list of MASVS category rows for template rendering.
+fn masvs_categories_to_json(masvs: &MasvsReport) -> serde_json::Value {
+    let cats: Vec<serde_json::Value> = masvs.categories.iter().map(|cat| {
+        let score_pct = (cat.score * 100.0).round() as i64;
+        let status_str = format!("{}", cat.status);
+        let status_lower = status_str.to_lowercase();
+        let failing_str = cat.failing_checks.join(", ");
+        serde_json::json!({
+            "name": cat.name,
+            "score_pct": score_pct,
+            "status": status_str,
+            "status_lower": status_lower,
+            "failing_checks_str": failing_str,
+        })
+    }).collect();
+    serde_json::Value::Array(cats)
+}
+
+/// Generate HTML report from an AndroidScanResult with optional MASVS scoring.
 pub fn render_html_report(result: &AndroidScanResult) -> Result<String> {
+    let masvs = result.masvs_report.as_ref().map(|m| m.clone())
+        .unwrap_or_else(|| crate::masvs::MasvsReport {
+            categories: vec![],
+            overall_score: 0.0,
+            overall_status: crate::masvs::MasvsStatus::NotTested,
+        });
+    render_html_report_with_masvs(result, &masvs)
+}
+
+/// Generate HTML report from an AndroidScanResult with explicit MASVS report.
+pub fn render_html_report_with_masvs(result: &AndroidScanResult, masvs: &MasvsReport) -> Result<String> {
     let mut env = Environment::new();
     env.add_template("report", REPORT_TEMPLATE)?;
     let tmpl = env.get_template("report")?;
@@ -75,8 +131,10 @@ pub fn render_html_report(result: &AndroidScanResult) -> Result<String> {
         "total": result.finding_counts.total,
     });
 
-    // Serialize findings to serde_json::Value for template rendering
     let findings_val = serde_json::to_value(&result.findings)?;
+    let masvs_cats = masvs_categories_to_json(masvs);
+    let overall_score_pct = (masvs.overall_score * 100.0).round() as i64;
+    let overall_status = format!("{}", masvs.overall_status);
 
     let html = tmpl.render(context! {
         package_name => result.package_name,
@@ -85,13 +143,122 @@ pub fn render_html_report(result: &AndroidScanResult) -> Result<String> {
         scan_id => result.scan_id,
         counts => counts,
         findings => findings_val,
+        masvs_categories => masvs_cats,
+        overall_score_pct => overall_score_pct,
+        overall_status => overall_status,
     })?;
 
     Ok(html)
 }
 
-/// Serialize scan result to JSON string.
+/// Generate HTML report for an iOS scan result with MASVS scoring.
+pub fn render_ios_html_report(
+    result: &crate::scanner::ios::IosScanResult,
+    masvs: &MasvsReport,
+) -> Result<String> {
+    let mut env = Environment::new();
+    env.add_template("report", REPORT_TEMPLATE)?;
+    let tmpl = env.get_template("report")?;
+
+    let counts = serde_json::json!({
+        "critical": result.finding_counts.critical,
+        "high": result.finding_counts.high,
+        "medium": result.finding_counts.medium,
+        "low": result.finding_counts.low,
+        "info": result.finding_counts.info,
+        "total": result.finding_counts.total,
+    });
+
+    let findings_val = serde_json::to_value(&result.findings)?;
+    let masvs_cats = masvs_categories_to_json(masvs);
+    let overall_score_pct = (masvs.overall_score * 100.0).round() as i64;
+    let overall_status = format!("{}", masvs.overall_status);
+
+    let html = tmpl.render(context! {
+        package_name => result.bundle_id,
+        version_name => result.version,
+        sha256 => result.sha256,
+        scan_id => result.scan_id,
+        counts => counts,
+        findings => findings_val,
+        masvs_categories => masvs_cats,
+        overall_score_pct => overall_score_pct,
+        overall_status => overall_status,
+    })?;
+
+    Ok(html)
+}
+
+/// Serialize Android scan result to JSON string.
 pub fn render_json_report(result: &AndroidScanResult) -> Result<String> {
     let json = serde_json::to_string_pretty(result)?;
     Ok(json)
+}
+
+/// Generate PDF report from HTML by shelling out to `weasyprint`.
+/// Requires 'weasyprint' in PATH. Returns None if not available.
+pub async fn render_pdf_report(html: &str, output_path: &Path) -> Option<Vec<u8>> {
+    // Check if weasyprint is available
+    let check = tokio::process::Command::new("weasyprint")
+        .arg("--version")
+        .output()
+        .await;
+
+    if check.is_err() || !check.unwrap().status.success() {
+        tracing::warn!("weasyprint not found in PATH; PDF export unavailable");
+        return None;
+    }
+
+    // Write HTML to a temp file
+    let tmp_dir = std::env::temp_dir();
+    let html_path = tmp_dir.join(format!("mobsf_report_{}.html", uuid_simple()));
+    let pdf_path = output_path.to_path_buf();
+
+    if let Err(e) = tokio::fs::write(&html_path, html.as_bytes()).await {
+        tracing::warn!("Failed to write temp HTML for PDF: {}", e);
+        return None;
+    }
+
+    // Run weasyprint <html_file> <pdf_file>
+    let result = tokio::process::Command::new("weasyprint")
+        .arg(&html_path)
+        .arg(&pdf_path)
+        .output()
+        .await;
+
+    // Clean up temp HTML
+    let _ = tokio::fs::remove_file(&html_path).await;
+
+    match result {
+        Ok(out) if out.status.success() => {
+            match tokio::fs::read(&pdf_path).await {
+                Ok(bytes) => Some(bytes),
+                Err(e) => {
+                    tracing::warn!("Failed to read generated PDF: {}", e);
+                    None
+                }
+            }
+        }
+        Ok(out) => {
+            tracing::warn!(
+                "weasyprint failed (exit {:?}): {}",
+                out.status.code(),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            None
+        }
+        Err(e) => {
+            tracing::warn!("Failed to run weasyprint: {}", e);
+            None
+        }
+    }
+}
+
+fn uuid_simple() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let t = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_nanos();
+    format!("{:08x}", t)
 }

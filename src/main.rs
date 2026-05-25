@@ -86,6 +86,7 @@ async fn run_server(port: u16, db_path: &str) -> anyhow::Result<()> {
         // Reports
         .route("/api/scan/:id/report", get(api::get_report_html_handler))
         .route("/api/scan/:id/report.json", get(api::get_report_json_handler))
+        .route("/api/scan/:id/report.pdf", get(api::get_report_pdf_handler))
         // WebSocket
         .route("/ws/scan/:scan_id", get(ws::ws_handler))
         .layer(DefaultBodyLimit::max(500 * 1024 * 1024))

@@ -12,6 +12,7 @@ pub mod tracker;
 
 use crate::scanner::ScanFinding;
 use crate::db::{DbPool, ScanStatus};
+use crate::masvs::MasvsReport;
 use std::path::Path;
 use anyhow::Result;
 
@@ -31,6 +32,7 @@ pub struct AndroidScanResult {
     pub java_file_count: usize,
     pub findings: Vec<ScanFinding>,
     pub finding_counts: FindingCounts,
+    pub masvs_report: Option<MasvsReport>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -207,6 +209,9 @@ pub async fn scan_apk(
 
     let finding_counts = FindingCounts::from_findings(&all_findings);
 
+    // Compute MASVS compliance score
+    let masvs_report = Some(crate::masvs::compute_masvs_score(&all_findings));
+
     let result = AndroidScanResult {
         scan_id: scan_id.to_string(),
         package_name,
@@ -219,6 +224,7 @@ pub async fn scan_apk(
         java_file_count,
         findings: all_findings,
         finding_counts,
+        masvs_report,
     };
 
     // Step 9: Persist result.json
